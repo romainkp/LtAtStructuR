@@ -1,0 +1,42 @@
+Package: LtAtStructuR
+Title: Structuring of Complex Longitudinal Data into Long Format
+Version: 0.0.1
+Authors@R: c(
+    person(given = "Romain", family = "Neugebauer",
+           email = "romain.s.neugebauer@kp.org",
+           role = c("aut", "cre")),
+    person(given = "Noel", family = "Pimentel",
+           email = "Noel.Pimentel@kp.org",
+           role = c("aut")),	   
+    person(given = "Nima", family = "Hejazi",
+           email = "nh@nimahejazi.org",
+           role = c("aut"),
+           comment = c(ORCID = "0000-0002-7127-2789"))
+  )
+Maintainer: Romain Neugebauer <romain.s.neugebauer@kp.org>
+Description: LtAtStructuR automates the structuring of a collection of
+    time-stamped measurements (e.g., electronic health record data) into a
+    standard long format analytic dataset suitable for the evaluation of the
+    effect of multiple time-point interventions in the presence of
+    time-dependent confounding or sources of selection bias.
+Depends: R (>= 3.2.0)
+Imports:
+    data.table,
+    R6,
+    pryr,
+    dplyr,
+    lubridate,
+    assertthat,
+    future.apply
+Suggests:
+    testthat,
+    knitr,
+    rmarkdown,
+    future,
+    covr
+License: GPL-3 + file LICENSE
+Encoding: UTF-8
+LazyData: true
+VignetteBuilder: knitr
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.1.0
