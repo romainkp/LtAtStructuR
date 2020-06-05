@@ -5,7 +5,7 @@ R/`LtAtStructuR`
 
 > Structuring of Complex Longitudinal Data into Long Format
 
-**Authors:** [Romain Neugebauer](https://divisionofresearch.kaiserpermanente.org/researchers/neugebauer-romain) , Noel Pimentel, and Nima Hejazi
+**Authors:** [Romain Neugebauer](https://divisionofresearch.kaiserpermanente.org/researchers/neugebauer-romain), Noel Pimentel, and Nima Hejazi
 
 ------------------------------------------------------------------------
 
@@ -41,13 +41,11 @@ Example
 This is a basic example which shows you how to solve a common problem:
 
 ``` r
-#library(LtAtStructuR)
-devtools::load_all()
+library(LtAtStructuR)
 library(data.table)
 library(lubridate)
-library(future)
-plan(transparent)
-#plan(multiprocess)
+library(future) # optional (for parallel processing)
+plan(multiprocess) # optional (for parallel processing)
 
 ## Define one cohort dataset, one exposure dataset, and one or more covariate
 ## datasets

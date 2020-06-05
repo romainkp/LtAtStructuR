@@ -19,8 +19,7 @@ knitr::opts_chunk$set(
 > Structuring of Complex Longitudinal Data into Long Format
 
 __Authors:__ [Romain
-Neugebauer](https://divisionofresearch.kaiserpermanente.org/researchers/neugebauer-romain)
-, Noel Pimentel, and Nima Hejazi
+Neugebauer](https://divisionofresearch.kaiserpermanente.org/researchers/neugebauer-romain), Noel Pimentel, and Nima Hejazi
 
 ---
 
@@ -59,13 +58,11 @@ from the root directory of this project.
 This is a basic example which shows you how to solve a common problem:
 
 ```{r example, eval=FALSE}
-#library(LtAtStructuR)
-devtools::load_all()
+library(LtAtStructuR)
 library(data.table)
 library(lubridate)
-library(future)
-plan(transparent)
-#plan(multiprocess)
+library(future) # optional (for parallel processing)
+plan(multiprocess) # optional (for parallel processing)
 
 ## Define one cohort dataset, one exposure dataset, and one or more covariate
 ## datasets
