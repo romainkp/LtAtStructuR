@@ -933,7 +933,7 @@ LtAtData <- R6::R6Class(
       assertthat::assert_that( identical( sort(private$.cohort_data$L0),
                                          sort(c(names(private$.cohort_data$L0_timeIndep),names(private$.cov_data)))
                                          ),
-                              msg = "Data construcion cannot start until the measurements post index date for all time-dependent covariates included in the cohort dataset are specified. Either correct the value for L0_timeIndep used to specify the cohort dataset or add the time-dependent measurements for the following covariates: "%+%missingTimeDep%+%".")
+                              msg = "Data construction cannot start until the measurements post index date for all time-dependent covariates included in the cohort dataset are specified. Either correct the value for L0_timeIndep used to specify the cohort dataset or add the time-dependent measurements for the following covariates: "%+%paste(missingTimeDep,collapse=", ")%+%".")
         
       ## Gather relevant elements for long-format construction (for readability)
       IDvar <- private$.cohort_data$IDvar
