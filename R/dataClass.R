@@ -62,7 +62,9 @@ getmode <- function(v) {
 #'           column of \code{data} that contains the date of study entry.
 #'     }
 #'     \item{\code{EOF_date}:}{\code{character} providing the name of the column
-#'           of \code{data} that contains the date of end of follow-up.
+#'           of \code{data} that contains the date of end of follow-up. All observations
+#'           with the end of follow-up date equal to the study entry date will be ignored
+#'           (i.e., excluded from the cohort).
 #'     }
 #'     \item{\code{EOF_type}:}{\code{character} providing the name of the column
 #'           of \code{data} corresponding to the reason for end of follow-up.
@@ -121,7 +123,8 @@ cohortData <- R6::R6Class(
     .EOF_type = NA,
     .Y_name = NA,
     .L0 = NA,
-    .L0_timeIndep = NA
+    .L0_timeIndep = NA,
+    .IDs_ignore = NA
   ),
   active = list(
     data = readOnly(".data"),
@@ -131,7 +134,8 @@ cohortData <- R6::R6Class(
     EOF_type = readOnly(".EOF_type"),
     Y_name = readOnly(".Y_name"),
     L0 = readOnly(".L0"),
-    L0_timeIndep = readOnly(".L0_timeIndep")
+    L0_timeIndep = readOnly(".L0_timeIndep"),
+    IDs_ignore = readOnly(".IDs_ignore")
   ),
   public = list(
     initialize = function(data, IDvar, index_date, EOF_date, EOF_type, Y_name,
@@ -234,6 +238,12 @@ cohortData <- R6::R6Class(
         "EOF_date colummn of data."
       )
       )
+      ignoredObs <- dataDT[, which(get(index_date) == get(EOF_date))]
+      if (length(ignoredObs) > 0) {
+        IDs_ignore <- as.vector(dataDT[ignoredObs,get(IDvar)])
+        dataDT <- dataDT[-ignoredObs, ]
+        warning(paste("Removing", length(ignoredObs), "observations because end of follow-up date is equal to study entry date"))
+      } else IDs_ignore <- NA
       assertthat::assert_that(class(dataDT[, get(EOF_type)]) %in% c("character", "integer"),
         msg = paste(
           "Class of EOF_type column in data is",
@@ -317,6 +327,7 @@ cohortData <- R6::R6Class(
       private$.Y_name <- Y_name
       private$.L0 <- L0
       private$.L0_timeIndep <- L0_timeIndep
+      private$.IDs_ignore <- IDs_ignore
     }
   )
 )
@@ -491,7 +502,7 @@ expData <- R6::R6Class(
     checkAgainst = function(otherData) {
       if ("cohortData" %in% class(otherData)) {
         assert_that(private$.IDvar == otherData$IDvar, msg = "exposure and cohort datasets must use the same column name to store unique subject identifiers.")
-        assert_that(all(private$.data[, get(private$.IDvar)] %in% otherData$data[, get(otherData$IDvar)]), msg = "Subject identifiers in the exposure dataset must also be found in the cohort dataset.")
+        assert_that(all(private$.data[!get(private$.IDvar)%in%otherData$IDs_ignore, get(private$.IDvar)] %in% otherData$data[, get(otherData$IDvar)]), msg = "Subject identifiers in the exposure dataset must also be found in the cohort dataset.")
         ## Identify exposure rows that need to be modified or removed (index/eof date):
         private$.data <- merge(private$.data, otherData$data[, c(otherData$IDvar, otherData$index_date, otherData$EOF_date), with = FALSE], by = private$.IDvar, all.x = TRUE, all.y = FALSE)
         expEpisode.ignored <- private$.data[get(private$.end_date) < get(otherData$index_date) | get(private$.start_date) > get(otherData$EOF_date) | (get(private$.start_date) < get(otherData$index_date) & get(private$.end_date) >= get(otherData$index_date)) | (get(private$.start_date) <= get(otherData$EOF_date) & get(private$.end_date) > get(otherData$EOF_date)), .N]
@@ -741,7 +752,7 @@ timeDepCovData <- R6::R6Class(
         assert_that(!private$.L_name %in% names(otherData$L0_timeIndep), msg = "The time-dependent covariate " %+% private$.L_name %+% " was specified as a time-independent covariate in the cohort dataset.")
         assert_that( class(private$.data[,get(private$.L_name)]) == class(otherData$data[,get(private$.L_name)]) , msg = "The type (numeric or character) of the time-dependent covariate " %+% private$.L_name %+% " does not match the type for its baseline values stored in the cohort dataset")
         assert_that(private$.IDvar == otherData$IDvar, msg = "The cohort dataset and the time-dependent covariate dataset for " %+% private$.L_name %+% " must use the same column name to store unique subject identifiers.")
-        assert_that(all(private$.data[, get(private$.IDvar)] %in% otherData$data[, get(otherData$IDvar)]), msg = "Subject identifiers in the time-dependent covariate dataset for " %+% private$.L_name %+% " must also be found in the cohort dataset.")
+        assert_that(all(private$.data[!get(private$.IDvar)%in%otherData$IDs_ignore, get(private$.IDvar)] %in% otherData$data[, get(otherData$IDvar)]), msg = "Subject identifiers in the time-dependent covariate dataset for " %+% private$.L_name %+% " must also be found in the cohort dataset.")
 
         ## Identify covariate rows that need to be modified or removed (index/eof date):
         private$.data <- merge(private$.data, otherData$data[, c(otherData$IDvar, otherData$index_date, otherData$EOF_date), with = FALSE], by = private$.IDvar, all.x = TRUE, all.y = FALSE)
@@ -1668,6 +1679,7 @@ LtAtData <- R6::R6Class(
       index_date_var <- private$.cohort_data$index_date
       start_date_var <- private$.exp_data$start_date
       end_date_var <- private$.exp_data$end_date
+      A_level <- private$.exp_data$exp_level
       t_ind_cov <- private$.cohort_data$L0[!private$.cohort_data$L0%in%names(private$.cov_data)]
 
       # Eventually we will loop over elements of the covariate list:
@@ -1699,7 +1711,7 @@ LtAtData <- R6::R6Class(
             cov_dates_this_id <- cov_data_this_id[,get(cov_date)]
             cov_values_this_id <- cov_data_this_id[,get(cov_name)]
             cov_data_this_id[, cov_date := lubridate::ymd(get(cov_date))]
-            exp_character <- is.character(exp_data$Alevel)
+            exp_character <- is.character(exp_data[,get(A_level)])
             exp_ref <- private$.exp_data$exp_ref
             exp_level <- private$.exp_data$exp_level
             # keep only the time-dependent values strictly after index date:
@@ -1714,9 +1726,9 @@ LtAtData <- R6::R6Class(
             overlaps <- outcome_data_this_id[data.table::data.table(cov_data_this_id),
                                              on = .(intstart <= cov_date,
                                                     intend >= cov_date)]
-            overlaps[, `:=`(intstart = NULL, intend = NULL, #i.ID = NULL, 
+            suppressWarnings(overlaps[, `:=`(intstart = NULL, intend = NULL, #i.ID = NULL, 
                             exposure = NULL, outcome = NULL, censor = NULL,
-                            caseExp = NULL, tie = NULL, A0.warn = NULL)] #, EOFtype = NULL)]
+                            caseExp = NULL, tie = NULL, A0.warn = NULL)]) #, EOFtype = NULL)]
             overlaps[, eval(eof_type_var):=NULL]
             overlaps[,eval("i."%+%id_var):=NULL]
             cov_data_this_id[, cov_date := NULL]

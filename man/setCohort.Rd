@@ -28,7 +28,9 @@ each subject in the cohort. Cannot have columns named 'IDvar',
 \code{data} that contains the date of study entry.}
 
 \item{EOF_date}{\code{character} providing the name of the column of
-\code{data} that contains the date of end of follow-up.}
+\code{data} that contains the date of end of follow-up. All observations
+with the end of follow-up date equal to the study entry date will be ignored
+(i.e., excluded from the cohort).}
 
 \item{EOF_type}{\code{character} providing the name of the column of
 \code{data} corresponding to the reason for end of follow-up.}
