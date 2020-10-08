@@ -14,7 +14,7 @@ exposed to the reference exposure level during follow-up.
 Exposure levels must be encoded by a character vector or an
 integer vector. There cannot be any overlapping exposure
 episodes. Cannot contain missing values. Cannot have columns
-named 'IDvar', 'start_date', 'end_date', or 'exp_level'.}
+named 'IDvar', 'start_date', 'end_date', 'exposure', or 'exp_level'.}
 
 \item{IDvar}{\code{character} providing the name of the column of
 \code{data} that contains the unique subject identifier.}

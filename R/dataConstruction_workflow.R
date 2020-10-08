@@ -132,7 +132,7 @@ setCohort <- function(data, IDvar, index_date, EOF_date, EOF_type, Y_name, L0, L
 #'             Exposure levels must be encoded by a character vector or an
 #'             integer vector. There cannot be any overlapping exposure
 #'             episodes. Cannot contain missing values. Cannot have columns
-#'             named 'IDvar', 'start_date', 'end_date', or 'exp_level'.
+#'             named 'IDvar', 'start_date', 'end_date', 'exposure', or 'exp_level'.
 #'
 #' @param IDvar \code{character} providing the name of the column of
 #'           \code{data} that contains the unique subject identifier.
@@ -294,8 +294,9 @@ setCovariate <- function(data, type, IDvar, L_date, L_name, categorical,
 #' @return \code{data.table} object
 #'
 #' @param LtAtspec specifies an object of class \code{LtAtData} created by
-#'                 assembling cohort, exposure, and time-dependent covariate
-#'                 data objects. Cannot be missing.
+#'                 assembling cohort (required), exposure (required), and
+#'                 time-dependent covariate (optional) data objects.
+#'                 Cannot be missing.
 #'
 #' @param time_unit specifies the unit of time (expressed in days) for
 #'                  discretizing follow-time into consecutive time intervals
@@ -352,6 +353,14 @@ construct <- function(LtAtspec, time_unit, first_exp_rule = 1,
                       exp_threshold = 0.5, format="standard", dates=FALSE) { 
 
     assert_that("LtAtData"%in%class(LtAtspec) , msg = "LtAtspec must be an object of class LtAtData" )
+    assert_that( (!"logical"%in%class(LtAtspec$cohort_data) & !"logical"%in%class(LtAtspec$exp_data)), 
+               msg = if("logical"%in%class(LtAtspec$cohort_data) & "logical"%in%class(LtAtspec$exp_data)){
+                 "LtAtspec must include a valid input cohort and exposure dataset"} 
+               else if("logical"%in%class(LtAtspec$cohort_data)){
+                 "LtAtspec must include a valid input cohort dataset"} 
+               else if ("logical"%in%class(LtAtspec$exp_data)){
+                 "LtAtspec must include a valid input exposure dataset"
+               })
     assert_that( length(time_unit)==1 && !is.na(time_unit) & class(time_unit)%in%c("integer","numeric")
                 && floor(time_unit)==time_unit , msg = "time_unit must be a non-missing integer" )
     assert_that( time_unit>0 , msg = "time_unit must be strictly positive" )    
@@ -363,6 +372,7 @@ construct <- function(LtAtspec, time_unit, first_exp_rule = 1,
     assert_that( length(format)==1 && class(format)%in%c("character")
                 && format%in%c("standard","MSM SAS macro"), msg = "format must be 'standard' or 'MSM SAS macro'" )
     assert_that( length(dates)==1 && !is.na(dates) & class(dates)%in%c("logical"), msg = "dates must be TRUE or FALSE" )
+
 
     LtAtspec$createIntervals(time_unit)
     LtAtspec$assignAC(first_exp_rule, exp_threshold)

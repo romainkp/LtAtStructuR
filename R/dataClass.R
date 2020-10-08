@@ -372,7 +372,7 @@ cohortData <- R6::R6Class(
 #'           Exposure levels must be encoded by a character vector or an integer
 #'           vector. There cannot be any overlapping exposure episodes. Cannot
 #'           contain missing values. Cannot have columns named 'IDvar',
-#'           'start_date', 'end_date', or 'exp_level'.
+#'           'start_date', 'end_date', 'exposure', or 'exp_level'.
 #'     }
 #'     \item{\code{IDvar}:}{\code{character} providing the name of the column of
 #'           \code{data} that contains the unique subject identifier.
@@ -457,8 +457,8 @@ expData <- R6::R6Class(
       ## Check table contains all columns referenced
       assert_that(all(c(IDvar, start_date, end_date, exp_level) %in% names(dataDT)))
       ## Check table contains no unallowed columns names
-      assert_that(!any(c("IDvar", "start_date", "end_date", "exp_level") %in% names(dataDT)), msg = "Columns of data cannot be named 'IDvar', 'start_date', 'end_date', or 'exp_level'.")
-
+      assert_that(!any(c("IDvar", "start_date", "end_date", "exp_level", "exposure") %in% names(dataDT)), msg = "Columns of data cannot be named 'IDvar', 'start_date', 'end_date', 'exposure', or 'exp_level'.")
+        
       ## Check table content
       assert_that(noNA(dataDT), msg = "data contains missing values.")
       ## Check valid IDvar column content and standardize if not
@@ -471,7 +471,6 @@ expData <- R6::R6Class(
       assert_that(lubridate::is.Date(dataDT[, get(start_date)]), msg = "Class of start_date in data is not valid: start dates of exposure episodes must be encoded by a date vector.")
       assert_that(lubridate::is.Date(dataDT[, get(end_date)]), msg = "Class of end_date in data is not valid: end dates of exposure episodes must be encoded by a date vector.")
       assert_that(all(dataDT[, get(start_date)] <= dataDT[, get(end_date)]), msg = "The start date of an exposure episode must precede or equal its end date. Each value in the start_date column of data must be lower than or equal to that in the same row of the end_date column of data.")
-
       assert_that(class(dataDT[, get(exp_level)]) %in% c("character", "integer"), msg = "Class of exp_level column in data is not valid: non-reference exposure levels must be encoded by a character or integer vector.")
       ## consistency between the class and values of the ref and nonRef exposure levels
       if (is.integer(dataDT[, get(exp_level)])) assert_that(is.integer(exp_ref), msg = "exp_ref must be an integer when the column exp_level of data is an integer vector.")
@@ -1687,725 +1686,730 @@ LtAtData <- R6::R6Class(
       # "sporadic": A1c in GS2
 
         ## looping over time-dependent covariates
-        for(cov_position in seq_along(private$.cov_data)){
 
-        # extract data for the current covariate only
-        cov_data <- private$.cov_data[[cov_position]]
-        cov_name <- private$.cov_data[[cov_position]]$L_name
-        cov_acute <- private$.cov_data[[cov_position]]$acute_change
-        cov_date <- private$.cov_data[[cov_position]]$L_date
-
-        # iterative over subject IDs in parallel to assign L(t)
-        data_assigned_lt_by_id <-
-          future.apply::future_lapply(unique(outcome_data[, get(id_var)]),
-          #lapply(unique(outcome_data[, get(id_var)]),
-                                      function(id) {
-            ## message(paste("Current ID:", id))
-            # subset to just the current subject
-            index_cov_this_id <- cohort_data[get(id_var) == id, get(cov_name)]
-            index_date_this_id <- cohort_data[get(id_var) == id, get(index_date_var)]
-            eof_date_this_id <- lubridate::ymd(cohort_data[get(id_var) == id, get(eof_date_var)])
-            exp_data_this_id <- exp_data[get(id_var) == id, ]
-            exp_start_this_id <- lubridate::ymd(exp_data_this_id[, get(start_date_var)])
-            cov_data_this_id <- cov_data$data[get(id_var) == id, ]
-            cov_dates_this_id <- cov_data_this_id[,get(cov_date)]
-            cov_values_this_id <- cov_data_this_id[,get(cov_name)]
-            cov_data_this_id[, cov_date := lubridate::ymd(get(cov_date))]
-            exp_character <- is.character(exp_data[,get(A_level)])
-            exp_ref <- private$.exp_data$exp_ref
-            exp_level <- private$.exp_data$exp_level
-            # keep only the time-dependent values strictly after index date:
-            cov_data_this_id <-
-              cov_data_this_id[eval(cov_date) > index_date_this_id, ]
-            outcome_data_this_id <- suppressWarnings(outcome_data[get(id_var) == id, ])
-            data.table::setnames(outcome_data_this_id, "case", "caseExp")
-
-            # use intervals to check where time-dependent covariate falls
-            # overlap finding technique inspired by
-            # https://stackoverflow.com/questions/41132081/find-which-interval-row-in-a-data-frame-that-each-element-of-a-vector-belongs-in
-            overlaps <- outcome_data_this_id[data.table::data.table(cov_data_this_id),
-                                             on = .(intstart <= cov_date,
-                                                    intend >= cov_date)]
-            suppressWarnings(overlaps[, `:=`(intstart = NULL, intend = NULL, #i.ID = NULL, 
-                            exposure = NULL, outcome = NULL, censor = NULL,
-                            caseExp = NULL, tie = NULL, A0.warn = NULL)]) #, EOFtype = NULL)]
-            overlaps[, eval(eof_type_var):=NULL]
-            overlaps[,eval("i."%+%id_var):=NULL]
-            cov_data_this_id[, cov_date := NULL]
-
-            # in general, L(t) is defined as occuring before the start of
-            # interval t (i.e., in bin t-1)
-            # a covariate occuring in bin 7 will most often be mapped to L(8)
-            if (nrow(outcome_data_this_id) > 1) {
-              overlaps[, intnum := intnum + 1]
-            }
-
-            # use only most recent covariate measurement assigned to interval
-            overlaps <- overlaps[, .SD[which.max(get(cov_date))],
-                                 by = intnum]
-
-            # combined (reduced) overlap data with outcomes data
-            combined_data <- merge(outcome_data_this_id, overlaps,
-                                   by = c(id_var, "intnum"), all.x = TRUE)
+        if(any(!is.na(private$.cov_data))){ ### ATTENTION: If code produced extra warnings, try !is.na(private$.cov_data)[1]
+          for(cov_position in seq_along(private$.cov_data)){
             
-            # define Z days as the number of days in each interval
-            z_days <- unique(combined_data[, intend - intstart + 1])
-
-            # add cases and flag indicating exposure change
-            # add flag indicating continous non-exposure so far
-            combined_data[, case := NA_character_]
-            combined_data[, exp_change :=
-                          (exposure != shift(exposure, n = 1L, type = "lag"))]
-            combined_data[1, exp_change := FALSE]
-            combined_data[intnum == 0 & (exposure == 1 | exposure!=exp_ref), exp_change := TRUE]
-            if(exp_character){
-              combined_data[,exposure_binary:=ifelse(exposure==exp_ref,0,1)]
-              combined_data[, part1 := !(cumsum(shift(exposure_binary,
-                                                      n = 1L, fill = 0,
-                                                      type = "lag")) > 0)]
-              combined_data$exposure_binary <- NULL
-            } else{
-              combined_data[, part1 := !(cumsum(shift(exposure,
-                                                      n = 1L, fill = 0,
-                                                      type = "lag")) > 0)]
-            }
-
-            # case 1/2: t is the first and not the last interval and the unit is
-            #           unexposed (case 1) or exposed (case 2)
-            if (nrow(combined_data) > 1) {
-              # case 1: unexposed at t = 0
-              combined_data[part1 & intnum == 0 & (exposure == 0 | exposure == exp_ref), case := "1"]
-              combined_data[part1 & intnum == 0 & (exposure == 0 | exposure == exp_ref),
-                            eval(cov_name) := index_cov_this_id]
-              combined_data[part1 & intnum == 0 & (exposure == 0 | exposure == exp_ref),
-                            eval(cov_date) := index_date_this_id]
-
-              # case 2: exposed at t = 0
-              combined_data[part1 & intnum == 0 & (exposure == 1 | exposure != exp_ref), case := "2"]
-              # cov_int_dates <- lubridate::ymd(overlaps[[cov_date]])
-              # NOTE: need to check whether first measurement after index date
-              # occurs prior to first exposure date
-
-              if (combined_data[intnum == 0, case == "2"]) {
-                interval.final <- lubridate::interval(index_date_this_id+1,exp_start_this_id[1]-cov_acute)
-                if(exp_character) {
-                  At.0 <- combined_data[intnum==0,exposure]
-                  exp_start_j <- exp_data_this_id[get(exp_level)%in%At.0,get(start_date_var)][1]
-                  interval.final <- lubridate::interval(index_date_this_id+1,exp_start_j-cov_acute)
-                }
-                if(any(cov_dates_this_id%within%interval.final)){
-                  combined_data[intnum==0,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
-                  combined_data[intnum==0,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
-                } else {
-                  combined_data[intnum==0,eval(cov_date):=index_date_this_id]
-                  combined_data[intnum==0,eval(cov_name):=index_cov_this_id]
-                }
-              }
-            }
-
-            # case 3/4: t is not the first interval or the last interval and
-            #           the unit does not change exposure status (case 3) or
-            #           does change exposure status (case 4)
-            if (any(combined_data$outcome == 1)) {
-              combined_data[!(intnum %in% c(0, .N-2, .N-1)) &
-                            exp_change == FALSE & part1 == TRUE, case := "3"]
-              combined_data[!(intnum %in% c(0, .N-2, .N-1)) &
-                            exp_change == TRUE & part1 == TRUE, case := "4"]
-            } else if (any(combined_data$censor == 1, na.rm = TRUE)) {
-              combined_data[!(intnum %in% c(0, .N-1)) & exp_change == FALSE
-                            & part1 == TRUE, case := "3"]
-              combined_data[!(intnum %in% c(0, .N-1)) & exp_change == TRUE
-                            & part1 == TRUE, case := "4"]
-            }
-
-            if(any(combined_data$case %in% "4")){
-              t.int <- combined_data[case==4,intnum]
-              interval.start <- dplyr::if_else(is.na(combined_data[intnum==t.int-1,get(cov_name)]), combined_data[intnum==t.int-1,intstart], combined_data[intnum==t.int-1,get(cov_date)+1]) ### Check if there exists a date for L(t-1); if not, starting point is intstart date; otherwise, starting point is L(t-1) date + 1
-              
-              if(exp_character){
-                At <- combined_data[case==4,exposure]
-                ints_overlaps <- lubridate::interval(combined_data[case == "4", intstart],
-                                                     combined_data[case == "4", intend])
-                exp1_int <- lubridate::interval(exp_data_this_id[get(exp_level)%in%At, get(start_date_var)],
-                                                exp_data_this_id[get(exp_level)%in%At, get(end_date_var)])
-              } else{
-                ints_overlaps <- lubridate::interval(combined_data[case == "4", intstart],
-                                                     combined_data[case == "4", intend])
-                exp1_int <- lubridate::interval(exp_data_this_id[, get(start_date_var)],
-                                                exp_data_this_id[, get(end_date_var)])
-              }
-              
-              d1_case11 <- do.call("c", lapply(ints_overlaps, function(x) {
-                suppressWarnings(as_date(min(lubridate::int_start(lubridate::intersect(x, exp1_int)),
-                                             na.rm = TRUE)))
-              }))
-              interval.end <- d1_case11 - cov_acute
-              #interval.end <- exp_start_this_id[1] - cov_acute              
-              assigned_L <- cov_data_this_id[cov_data_this_id[, get(cov_date)]
-                                             %within% suppressWarnings(lubridate::interval(interval.start,interval.end)), ][, .SD[which.max(get(cov_date))]]              
-              if(nrow(assigned_L)==0) {
-                combined_data[case==4,eval(cov_name):=NA]
-                combined_data[case==4,eval(cov_date):=NA]
-              } else {
-                combined_data[case==4,eval(cov_name):=assigned_L[,get(cov_name)]]
-                combined_data[case==4,eval(cov_date):=assigned_L[,get(cov_date)]]
-              }
-            }
-
-            # case 5/7: t is the last interval and the unit does not change
-            #           exposure status (case 5) or does change exposure status
-            #           (case 7) and a right-censoring event occurs. Either may
-            #           apply when t is the first and the last interval.
-            combined_data[intnum == .N - 1 & exp_change == FALSE
-                          & part1 == TRUE & censor == 1, case := "5"]
-            combined_data[intnum == .N - 1 & exp_change == TRUE
-                          & part1 == TRUE & censor == 1, case := "7"]
+            # extract data for the current covariate only
+            cov_data <- private$.cov_data[[cov_position]]
+            cov_name <- private$.cov_data[[cov_position]]$L_name
+            cov_acute <- private$.cov_data[[cov_position]]$acute_change
+            cov_date <- private$.cov_data[[cov_position]]$L_date
             
-            if(any(combined_data$case %in% c("5","7"))) {
-              t.int <- combined_data[case%in%c("5","7"),intnum]
-              if(t.int==0){
-                interval.start <- index_date_this_id
-              } else{
-                interval.start <- dplyr::if_else(combined_data[intnum==t.int-1,is.na(get(cov_name)) & is.na(get(cov_date))], combined_data[intnum==t.int-1,intstart], combined_data[intnum==t.int-1,get(cov_date)+1]) ### Check if there exists a date and cov value for L(t-1); if not, starting point is intstart date, if yes, starting point is L(t-1) date + 1
-              }
-              interval.end <- eof_date_this_id[1]-cov_acute
-              interval.final <- lubridate::interval(interval.start,interval.end)
-              ### This case is particular to when t.int==0
-              cov_dates_this_id_t0_tmp <- c(index_date_this_id,cov_dates_this_id)
-              cov_values_this_id_t0_tmp <- c(index_cov_this_id,cov_values_this_id)
-              ### index date and value supersedes any covariate measurement on same day
-              cov_dates_this_id_t0 <- cov_dates_this_id_t0_tmp[!duplicated(cov_dates_this_id_t0_tmp)]
-              cov_values_this_id_t0 <- cov_values_this_id_t0_tmp[!duplicated(cov_dates_this_id_t0_tmp)]
-              if(any(cov_dates_this_id_t0%within%interval.final)){
-                combined_data[intnum==t.int,eval(cov_date):=tail(cov_dates_this_id_t0[cov_dates_this_id_t0%within%interval.final],1)]
-                combined_data[intnum==t.int,eval(cov_name):=tail(cov_values_this_id_t0[cov_dates_this_id_t0%within%interval.final],1)]
-              }
-              else{ ### L(t) is set to missing if no such measurements exists
-                combined_data[intnum==t.int,eval(cov_date):=NA]
-                combined_data[intnum==t.int,eval(cov_name):=NA]
-              }
-            }
-            #if (any(combined_data$case %in% c("5", "7")) && nrow(cov_data_this_id) > 0) {
-            # if (any(combined_data$case %in% c("7")) && nrow(cov_data_this_id) > 0) {
-            #   # simply overwrite the shifted covariate value and date with the
-            #   # last observed entry; it is fine to ignore whether the date goes
-            #   # past the censoring time since there should not be measurements
-            #   # after censoring, by definition.
-            #   #if (nrow(combined_data) == 1) {
-            #     #overwrite_last_cov <-
-            #       #which.min(abs(eof_date_this_id -
-            #                     #cov_data_this_id[[cov_date]]))
-            #     #overwrite_cov <- cov_data_this_id[overwrite_last_cov,
-            #                                       #..cov_name]
-            #     #overwrite_date <- cov_data_this_id[overwrite_last_cov,
-            #                                        #..cov_date]
-            #     #combined_data[case %in% c("5", "7"),
-            #                   #eval(cov_name) := overwrite_cov]
-            #     #combined_data[case %in% c("5", "7"),
-            #                   #eval(cov_date) := overwrite_date]
-            #   #} else {
-            #     eof_int <- combined_data[eof_date_this_id %within%
-            #                              lubridate::interval(intstart, intend), intnum]
-            #     prev_intstart <- combined_data[intnum == eof_int - 1, intstart]
-            #     overwrite_last_cov <-
-            #       which.min(abs(eof_date_this_id -
-            #                     cov_data_this_id[[cov_date]]))
-            #     overwrite_date <- cov_data_this_id[overwrite_last_cov,
-            #                                        ..cov_date]
-            #     check_prev_int <- lubridate::as_date(overwrite_date[[1]]) > prev_intstart
-            #     if (isTRUE(check_prev_int)) {
-            #       overwrite_cov <- cov_data_this_id[overwrite_last_cov,
-            #                                         ..cov_name]
-            #       combined_data[case %in% c("5", "7"),
-            #                     eval(cov_name) := overwrite_cov]
-            #       combined_data[case %in% c("5", "7"),
-            #                     eval(cov_date) := overwrite_date]
-            #     }
-            #   #}
-            # }
-
-            # case 6/8: t is the last interval and the unit does not change
-            #           exposure status (case 6) or does change exposure status
-            #           (case 8) and the outcome event occurs. Either may apply
-            #           when t is the first and the last interval.
-            # NOTE: when there's an outcome, there exists an artificial last row
-            #       note also that `intnum` is zero-indexed so need to use .N-2
-            #       to catch the actually last observed data row.
-            if (any(combined_data$outcome == 1)) {
-              combined_data[intnum == .N-2 & exp_change == FALSE &
-                            part1 == TRUE, case := "6"]
-              combined_data[intnum == .N-2 & exp_change == TRUE &
-                            part1 == TRUE, case := "8"]
-            }
-
-            if (any(combined_data$case %in% "8") & first_exp_rule==1) {
-              ### L(t) assignment
-              t.int <- combined_data[case==8,intnum]
-              interval.start <- dplyr::if_else(is.na(combined_data[intnum==t.int-1,get(cov_name)]), combined_data[intnum==t.int-1,intstart], combined_data[intnum==t.int-1,get(cov_date)+1]) ### Check if there exists an assigned date for L(t-1); if not, starting point is intstart date; otherwise, starting point is L(t-1) date + 1
-              if(t.int==0) interval.start <- index_date_this_id ### For t.int=0, the start of the interval is index date
-              if(exp_character){
-                At <- combined_data[intnum==t.int,exposure]
-                exp_start_j <- exp_data_this_id[get(exp_level)%in%At,get(start_date_var)][1]
-                interval.end <- exp_start_j-cov_acute
-                interval.final <- lubridate::interval(interval.start,interval.end)
-              } else{
-                interval.end <- exp_start_this_id[1] - cov_acute
-                interval.final <- lubridate::interval(interval.start,interval.end)
-              }
-              ### This case is particular to when t.int==0
-              cov_dates_this_id_t0_tmp <- c(index_date_this_id,cov_dates_this_id)
-              cov_values_this_id_t0_tmp <- c(index_cov_this_id,cov_values_this_id)
-              ### index date and value supersedes any covariate measurement on same day
-              cov_dates_this_id_t0 <- cov_dates_this_id_t0_tmp[!duplicated(cov_dates_this_id_t0_tmp)]
-              cov_values_this_id_t0 <- cov_values_this_id_t0_tmp[!duplicated(cov_dates_this_id_t0_tmp)]
-              if(t.int==0){
-                if(any(cov_dates_this_id_t0%within%interval.final)){
-                  combined_data[intnum==t.int,eval(cov_date):=tail(cov_dates_this_id_t0[cov_dates_this_id_t0%within%interval.final],1)]
-                  combined_data[intnum==t.int,eval(cov_name):=tail(cov_values_this_id_t0[cov_dates_this_id_t0%within%interval.final],1)]
-                } else if(interval.start>interval.end){
-                  combined_data[intnum==t.int,eval(cov_date):=index_date_this_id]
-                  combined_data[intnum==t.int,eval(cov_name):=index_cov_this_id]
-                } else { 
-                  combined_data[intnum==t.int,eval(cov_date):=NA]
-                  combined_data[intnum==t.int,eval(cov_name):=NA]
-                }
-              }
-              else {
-                if(any(cov_dates_this_id%within%interval.final)){
-                  combined_data[intnum==t.int,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
-                  combined_data[intnum==t.int,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
-                }
-                else{ ### L(t) is set to missing if no such measurements exists
-                  combined_data[intnum==t.int,eval(cov_date):=NA]
-                  combined_data[intnum==t.int,eval(cov_name):=NA]
-                }
-              }
-
-              ### L(t+1) assignment
-              #is.na(combined_data[intnum==t.int,get(cov_date)])
-              #acute.exp.date <- dplyr::if_else(cov_acute,exp_start_this_id,exp_start_this_id+1)
-              acute.exp.date <- exp_start_this_id[1]+!cov_acute
-              interval.start <- dplyr::if_else(is.na(combined_data[intnum==t.int,get(cov_date)]), acute.exp.date, combined_data[intnum==t.int,get(cov_date)]+1) ### interval.start is strictly after the date when L(t) is measured, if L(t) is present, or, else,(strictly after the first day the exposure changes(i.e. cov_acute==FALSE) or on or after the first day when the exposure changes(i.e. cov_acute==TRUE))
-              interval.end <- eof_date_this_id
-              interval.final <- lubridate::interval(interval.start,interval.end)
-              if(any(cov_dates_this_id%within%interval.final)){
-                combined_data[intnum==t.int+1,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
-                combined_data[intnum==t.int+1,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
-              }
-              else{
-                combined_data[intnum==t.int+1,eval(cov_date):=NA]
-                combined_data[intnum==t.int+1,eval(cov_name):=NA]
-              }
-          }
-
-            # NOTE: cases 5--8 all apply the same logic when there is just a
-            #       single observed interval --- that is, replace w/e the
-            #       currently assigned values with closest values prior to the
-            #       failure/censoring date, inclusive of index measurements
-            if (nrow(combined_data) == 1 & !(any(combined_data[intnum==0,case]==c("5","7","8")))) { ### excluding cases 5,7, 8 because code above accounts for value assignmentat t=0
-              index_entry <- list(id_var = id, cov_name = index_cov_this_id,
-                                  cov_date = index_date_this_id)
-              names(index_entry) <- c(id_var, cov_name, cov_date)
-              index_cov_data_this_id <-
-                data.table::rbindlist(list(index_entry, cov_data_this_id),
-                                      use.names = TRUE)
-              index_overwrite <- index_cov_data_this_id[get(cov_date) <
-                                                        eof_date_this_id]
-              index_overwrite <-
-                index_overwrite[, .SD[which.max(get(cov_date))]]
-              combined_data[, eval(cov_name) := index_overwrite[[cov_name]]]
-              combined_data[, eval(cov_date) := index_overwrite[[cov_date]]]
-            }
-
-            # NOTE: now, we're in "part 2", defined only as all intervals that
-            #       follow the first period in which exposure status changes
-            # part II has two case types: 1) last bin (cases 12-14), 2) not a
-            # last bin (cases 10-11)
-
-            # case 10/11: t is not the last interval and the unit does not
-            #             change exposure status (like case 3) or does change
-            #             exposure status (like case 4)
-            if (any(combined_data$censor == 1, na.rm = TRUE)) {
-              combined_data[intnum != .N-1 & exp_change == FALSE &
-                            part1 == FALSE, case := "10"]
-              combined_data[intnum != .N-1 & exp_change == TRUE &
-                            part1 == FALSE, case := "11"]
-            } else {
-              # NOTE: again, note that the last row of observed data is .N-2,
-              #       but there's an artificial last row absent censoring, so
-              #       we need to ignore both .N-2 and .N-1 here...
-              combined_data[!(intnum %in% c(.N-2, .N-1)) &
-                            exp_change == FALSE & part1 == FALSE, case := "10"]
-              combined_data[!(intnum %in% c(.N-2, .N-1)) & exp_change == TRUE &
-                            part1 == FALSE, case := "11"]
-            }
-
-            if(any(combined_data$case %in% c("10","11"))){
-              t.int <- combined_data[case%in%c("10","11"),intnum]
-              for(t.i in t.int){
-                t.i.case <- combined_data[intnum==t.i,case]
-                if(t.i.case==10){
-                  interval.start <- dplyr::if_else(combined_data[intnum==t.i-1,is.na(get(cov_name)) & is.na(get(cov_date))], combined_data[intnum==t.i-1,intstart], combined_data[intnum==t.i-1,get(cov_date)+1]) ### Check if there exists a date for L(t-1); if not, starting point is intstart date, if yes, starting point is L(t-1) date + 1
-                  interval.end <- combined_data[intnum==t.i-1,intend]
-                  interval.final <- lubridate::interval(interval.start,interval.end)
-                  if(any(cov_dates_this_id%within%interval.final)){
-                    combined_data[intnum==t.i,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
-                    combined_data[intnum==t.i,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
-                  }
-                  else{ ### L(t) is set to missing if no such measurements exists
-                    combined_data[intnum==t.i,eval(cov_date):=NA]
-                    combined_data[intnum==t.i,eval(cov_name):=NA]
-                  }
-                }
-                else{
-                  interval.start <- dplyr::if_else(combined_data[intnum==t.i-1,is.na(get(cov_name)) & is.na(get(cov_date))], combined_data[intnum==t.i-1,intstart], combined_data[intnum==t.i-1,get(cov_date)+1]) ### Check if there exists a date for L(t-1); if not, starting point is intstart date, if yes, starting point is L(t-1) date + 1
-                  ints_overlaps <- lubridate::interval(combined_data[intnum == t.i, intstart],
-                                                       combined_data[intnum == t.i, intend])
-                  A.t <- combined_data[intnum==t.i,exposure]
-                  exp1_int <- lubridate::interval(exp_data_this_id[get(exp_level)==A.t, get(start_date_var)],
-                                                  exp_data_this_id[get(exp_level)==A.t, get(end_date_var)])
-                  exp0_int <-
-                    data.table::data.table(exp0Start = exp_data_this_id[, get(end_date_var)] + 1,
-                                           exp0End = shift(exp_data_this_id[, get(start_date_var) - 1],
-                                                           n = 1L, fill = eof_date_this_id,
-                                                           type = "lead"))
-                  exp0_int <-
-                    rbind(data.table::data.table(exp0Start = index_date_this_id,
-                                                 exp0End = exp_data_this_id[1, get(start_date_var) - 1]),
-                          exp0_int)
-                  exp0_int <- exp0_int[exp0End>=exp0Start]
-                  ### Final intervals of non-exposure dates
-                  exp0_int <- lubridate::interval(exp0_int[,exp0Start],exp0_int[,exp0End])
-                  
-                  d1_case11 <- do.call("c", lapply(ints_overlaps, function(x) {
-                    suppressWarnings(as_date(min(lubridate::int_start(lubridate::intersect(x, exp1_int)),
-                                                 na.rm = TRUE)))
-                  }))
-                  d0_case11 <- do.call("c", lapply(ints_overlaps, function(x) {
-                    suppressWarnings(as_date(min(lubridate::int_start(lubridate::intersect(x, exp0_int)),
-                                                 na.rm = TRUE)))
-                  }))
-                  d_case11 <-
-                    dplyr::if_else(combined_data[intnum == t.i, (exposure == 0 | exposure == exp_ref)], #dplyr::if_else(combined_data[case == "11", exposure] == 0,
-                                   d0_case11, d1_case11)
-                  ### Note that if A(t-1)=j (exposed status) and A(t)=0/"not exposed" then the start
-                  ### of the non-exposure status  is defined as the first day of the interval when the
-                  ### unit is unexposed to any exposure levels. If the patients is always exposed during
-                  ### the interval then the start of non-exposure is defined as the first day of the interval
-                  ### by default. (i.e. if d_case11 is NA then we use the start of the interval as day d)
-                  if(is.na(as.character(d_case11))) d_case11 <- combined_data[intnum==t.i,intstart]
-                  interval.end <- d_case11 - cov_acute
-                  interval.final <- lubridate::interval(interval.start,interval.end)
-                  if(any(cov_dates_this_id%within%interval.final)){
-                    combined_data[intnum==t.i,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
-                    combined_data[intnum==t.i,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
-                  }
-                  else{ ### L(t) is set to missing if no such measurements exists
-                    combined_data[intnum==t.i,eval(cov_date):=NA]
-                    combined_data[intnum==t.i,eval(cov_name):=NA]
-                  }
-                }
-              }
-            }
-            # if(id=="000000RS7572")browser()
-            # if(any(combined_data$case %in% "10")){
-            #   t.int <- combined_data[case==10,intnum][1]
-            #   if(exp_character) t.int <- combined_data[exposure!=exp_ref & case==10,intnum][1]
-            #   interval.start <- dplyr::if_else(is.na(combined_data[intnum==t.int-1,get(cov_name)]), combined_data[intnum==t.int-1,intstart], combined_data[intnum==t.int-1,get(cov_date)+1]) ### Check if there exists a date for L(t-1); if not, starting point is intstart date, if yes, starting point is L(t-1) date + 1
-            #   interval.end <- combined_data[intnum==t.int-1,intend]
-            #   interval.final <- lubridate::interval(interval.start,interval.end)
-            #   if(any(cov_dates_this_id%within%interval.final)){
-            #     combined_data[intnum==t.int,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
-            #     combined_data[intnum==t.int,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
-            #   }
-            #   else{ ### L(t) is set to missing if no such measurements exists
-            #     combined_data[intnum==t.int,eval(cov_date):=NA]
-            #     combined_data[intnum==t.int,eval(cov_name):=NA]
-            #   }
-            # }
-            # 
-            # # Case 11 is similar to case 2:
-            # if (any(combined_data$case %in% "11")) {
-            #   ints_overlaps <- lubridate::interval(combined_data[case == "11", intstart],
-            #                                        combined_data[case == "11", intend])
-            #   exp1_int <- lubridate::interval(exp_data_this_id[, get(start_date_var)],
-            #                                   exp_data_this_id[, get(end_date_var)])
-            #   exp0_int <-
-            #     data.table::data.table(exp0Start = exp_data_this_id[, get(end_date_var)] + 1,
-            #                exp0End = shift(exp_data_this_id[, get(start_date_var) - 1],
-            #                                n = 1L, fill = eof_date_this_id,
-            #                                type = "lead"))
-            #   exp0_int <-
-            #     rbind(data.table::data.table(exp0Start = index_date_this_id,
-            #                      exp0End = exp_data_this_id[1, get(start_date_var) - 1]),
-            #           exp0_int)
-            #   exp0_int <- exp0_int[exp0End>=exp0Start]
-            #   ### Final intervals of non-exposure dates
-            #   exp0_int <- lubridate::interval(exp0_int[,exp0Start],exp0_int[,exp0End])
-            # 
-            #   d1_case11 <- do.call("c", lapply(ints_overlaps, function(x) {
-            #     suppressWarnings(as_date(min(lubridate::int_start(lubridate::intersect(x, exp1_int)),
-            #                                  na.rm = TRUE)))
-            #   }))
-            #   d0_case11 <- do.call("c", lapply(ints_overlaps, function(x) {
-            #     suppressWarnings(as_date(min(lubridate::int_start(lubridate::intersect(x, exp0_int)),
-            #                                  na.rm = TRUE)))
-            #   }))
-            #   d_case11 <-
-            #     dplyr::if_else(combined_data[case == "11", (exposure == 0 | exposure == exp_ref)], #dplyr::if_else(combined_data[case == "11", exposure] == 0,
-            #                    d0_case11, d1_case11)
-            #   # If cov_acute=TRUE, we should not look for covariates measured on day d
-            #   # Ltm1_tint <- combined_data[case==11,intnum-1]
-            #   # combined_data[intnum%in%Ltm1_tint & is.na(get(cov_date)),Ltm1_instart:=intstart]
-            #   # combined_data[intnum%in%Ltm1_tint & !is.na(get(cov_date)),Ltm1_instart:=get(cov_date)+1]
-            #   # combined_data[,Ltm1_instart:=shift(Ltm1_instart, n = 1L, type = "lag")]
-            #   ints_overlaps <- lubridate::interval(combined_data[case == "11", intstart], ### ATTENTION: ints_overlaps has to include previous interval strictly after when L(t-1) is measured; right now, it's starting at current interval
-            #                             d_case11 - cov_acute)
-            #   # ints_overlaps <- interval(combined_data[case == "11", Ltm1_instart], d_case11 - cov_acute) ### ATTENTION: Trying to implement a fix here that accounts for starting at the previous interval
-            #   overwrite_cov <- rbindlist(lapply(ints_overlaps, function(x)
-            #     cov_data_this_id[cov_data_this_id[, get(cov_date)]
-            #                      %within% x, ][, .SD[which.max(get(cov_date))]]),
-            #                              idcol = TRUE)
-            #   overwrite_cov[, intnum := combined_data[case == "11",
-            #                                           intnum][overwrite_cov[, .id]]]
-            #   ## Overwrite index covariate value with the one before exposure
-            #   combined_data[intnum %in% overwrite_cov$intnum,
-            #                 eval(cov_name) := overwrite_cov[[cov_name]]]
-            #   combined_data[intnum %in% overwrite_cov$intnum,
-            #                 eval(cov_date) := overwrite_cov[[cov_date]]]
-            #   ## The value used for overwriting was stored in next interval
-            #   ## remove it since used now in current interval
-            #   #combined_data[intnum %in% (overwrite_cov$intnum+1),
-            #   #            eval(cov_name) := NA_real_]
-            #   #combined_data[intnum %in% (overwrite_cov$intnum+1),
-            #   #            eval(cov_date) := ymd(NA_real_)]
-            #   combined_data[!is.na(get(cov_date)),duplicated:=duplicated(get(cov_date))]
-            #   combined_data[duplicated%in%TRUE,eval(cov_date):=NA]
-            #   combined_data[duplicated%in%TRUE,eval(cov_name):=NA]
-            #   combined_data[,duplicated:=NULL]
-            # }
-
-            # case 12/13/14: t is the last interval and the unit experiences a
-            #                right-censoring event (case 12), or does not change
-            #                exposure status and the outcome event occurs (case
-            #                13), or does change exposure status and the outcome
-            #                event occurs (case 14)
-
-            # first, handle case 12, since most trivial (NOTE: use .N-1 here as
-            # there is no artificial final row when censoring occurs)
-            combined_data[intnum == .N-1 & part1 == FALSE & censor == 1,
-                          case := "12"]
-
-            if (any(combined_data$case %in% "12")){
-              int.start <- dplyr::if_else(is.na(lubridate::ymd(combined_data[.N-1, get(cov_date)])), lubridate::ymd(combined_data[.N-1, intstart]), lubridate::ymd(combined_data[.N-1, get(cov_date)+1]))
-              int.end <- eof_date_this_id-cov_acute
-              
-              assigned_L <- cov_data_this_id[cov_data_this_id[, get(cov_date)]
-                                             %within% suppressWarnings(lubridate::interval(int.start,int.end)), ][, .SD[which.max(get(cov_date))]]
-              
-              if(nrow(assigned_L)==0) {
-                combined_data[case==12,eval(cov_name):=NA]
-                combined_data[case==12,eval(cov_date):=NA]
-              } else {
-                combined_data[case==12,eval(cov_name):=assigned_L[,get(cov_name)]]
-                combined_data[case==12,eval(cov_date):=assigned_L[,get(cov_date)]]
-              }
-              
-            }
-            
-            # now, it gets a bit more complicated with cases 13 and 14...
-            # let Z be the number of days in each interval and call the Z-day
-            # interval before the event 'Zlast' and the preceding Z-day
-            # interval 'Zpenultimate'
-            if (combined_data[.N, outcome] == 1) {
-              combined_data[intnum == .N-2 & exp_change == FALSE &
-                            part1 == FALSE, case := "13"]
-              combined_data[intnum == .N-2 & exp_change == TRUE &
-                            part1 == FALSE, case := "14"]
-            }
-
-            if(any(combined_data$case %in% "13") | (any(combined_data$case %in% "6") & first_exp_rule==0)){ 
-              t.int <- combined_data[case==13 | case==6, intnum]
-              if(t.int!=0){
-                Zpenultimate <- lubridate::interval(eof_date_this_id-(2*z_days)+1,eof_date_this_id-z_days)
-                Zlast <- lubridate::interval(eof_date_this_id-z_days+1,eof_date_this_id)
-                ### L(t) is set to the last measurement in 'Zpenultimate' strictly after the date when L(t-1) is measured; so, modifying Zpenultimate to begin with (L(t-1) date + 1) if L(t) exists
-                if(!is.na(combined_data[intnum==t.int-1,get(cov_name)])) lubridate::int_start(Zpenultimate) <- combined_data[intnum==t.int-1,get(cov_date)] + 1
-                ### ATTENTION: Found bug with logic for case 13 - I feel L(t) should be set to the last measurment in 'Zpenultimate' strictly after the date when L(t-1) is measured or strictly after date of the last non-missing measurment
-                if(any(combined_data[!is.na(get(cov_date)) & intnum<t.int,get(cov_date)]%within%Zpenultimate)){
-                  Zpenultimate.modified.start <- combined_data[!is.na(get(cov_date)) & intnum<t.int,get(cov_date)][combined_data[!is.na(get(cov_date)) & intnum<t.int,get(cov_date)]%within%Zpenultimate] + 1
-                  lubridate::int_start(Zpenultimate) <- Zpenultimate.modified.start 
-                }
-                if(any(cov_dates_this_id%within%Zpenultimate)){  
-                  combined_data[intnum==t.int,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%Zpenultimate],1)]
-                  combined_data[intnum==t.int,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%Zpenultimate],1)]
-                } else{
-                  combined_data[intnum==t.int,eval(cov_date):=NA]
-                  combined_data[intnum==t.int,eval(cov_name):=NA]
-                }
-                
-                ### L(t+1) assignment
-                interval.start <- dplyr::if_else(is.na(combined_data[intnum==t.int,get(cov_date)]), max(lubridate::as_date(lubridate::int_end(Zpenultimate))+1, combined_data[!is.na(get(cov_date)) & intnum<t.int,][.N,get(cov_date)+1]), combined_data[intnum==t.int,get(cov_date)]+1) ### interval.start is strictly after the date when L(t) is measured, if L(t) is present, or, else,(strictly after the first day the exposure changes(i.e. cov_acute==FALSE) or on or after the first day when the exposure changes(i.e. cov_acute==TRUE))
-                interval.end <- eof_date_this_id
-                interval.final <- lubridate::interval(interval.start,interval.end)
-                if(any(cov_dates_this_id%within%interval.final)){
-                  combined_data[intnum==t.int+1,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
-                  combined_data[intnum==t.int+1,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
-                } else{
-                  combined_data[intnum==t.int+1,eval(cov_date):=NA]
-                  combined_data[intnum==t.int+1,eval(cov_name):=NA]
-                }
-              }
-            }
-
-            if(any(combined_data$case %in% "14") | (any(combined_data$case %in% "8") & first_exp_rule==0)){
-              t.int <- combined_data[case==14 | case==8, intnum]
-              if(any(combined_data$case %in% "8") & t.int==0){ ### Particular case for when case==8 and t.int==0
-                interval.start <- index_date_this_id
-                if(exp_character){
-                  At <- combined_data[intnum==t.int,exposure]
-                  exp_start_j <- exp_data_this_id[get(exp_level)%in%At,get(start_date_var)][1]
-                  interval.end <- exp_start_j-cov_acute
-                } else{
-                  interval.end <- exp_start_this_id[1]-cov_acute
-                }
-                interval.final <- lubridate::interval(interval.start,interval.end)
-                ### This case is particular to when t.int==0
-                cov_dates_this_id_t0_tmp <- c(index_date_this_id,cov_dates_this_id)
-                cov_values_this_id_t0_tmp <- c(index_cov_this_id,cov_values_this_id)
-                ### index date and value supersedes any covariate measurement on same day
-                cov_dates_this_id_t0 <- cov_dates_this_id_t0_tmp[!duplicated(cov_dates_this_id_t0_tmp)]
-                cov_values_this_id_t0 <- cov_values_this_id_t0_tmp[!duplicated(cov_dates_this_id_t0_tmp)]
-                if(any(cov_dates_this_id_t0%within%interval.final)){
-                  combined_data[intnum==t.int,eval(cov_date):=tail(cov_dates_this_id_t0[cov_dates_this_id_t0%within%interval.final],1)]
-                  combined_data[intnum==t.int,eval(cov_name):=tail(cov_values_this_id_t0[cov_dates_this_id_t0%within%interval.final],1)]
-                } else if(interval.start>interval.end) { ## if d=index date and cov_acute=TRUE, then L(t) is set to the measurment on the index date (if this is true then interval.start>interval.end)
-                  combined_data[intnum==t.int,eval(cov_date):=index_date_this_id]
-                  combined_data[intnum==t.int,eval(cov_name):=index_cov_this_id]
-                } else {
-                  combined_data[intnum==0,eval(cov_date):=NA]
-                  combined_data[intnum==0,eval(cov_name):=NA]
-                }
-                ### L(t+1) assignment
-                interval.start <- dplyr::if_else(is.na(combined_data[intnum==t.int,get(cov_date)]), exp_start_this_id[1]+!cov_acute, combined_data[intnum==t.int,get(cov_date)]+1) ### interval.start is strictly after the date when L(t) is measured, if L(t) is present, or; else,(strictly after the first day the exposure changes(i.e. cov_acute==FALSE) or on or after the first day when the exposure changes(i.e. cov_acute==TRUE))
-                interval.end <- eof_date_this_id
-                interval.final <- lubridate::interval(interval.start,interval.end)
-                if(any(cov_dates_this_id%within%interval.final)){
-                  combined_data[intnum==t.int+1,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
-                  combined_data[intnum==t.int+1,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
-                }
-                else{
-                  combined_data[intnum==t.int+1,eval(cov_date):=NA]
-                  combined_data[intnum==t.int+1,eval(cov_name):=NA]
-                }
-              }
-              else {
-                exp0_int <-
-                  data.table::data.table(exp0Start = exp_data_this_id[, get(end_date_var)] + 1,
-                                         exp0End = shift(exp_data_this_id[, get(start_date_var) - 1],
-                                                         n = 1L, fill = eof_date_this_id,
-                                                         type = "lead"))
-                exp0_int <-
-                  rbind(data.table::data.table(exp0Start = index_date_this_id,
-                                               exp0End = exp_data_this_id[1, get(start_date_var) - 1]),
-                        exp0_int)
-                exp0_int <- exp0_int[exp0End>=exp0Start]
-                
-                Zlast <- lubridate::interval(eof_date_this_id-z_days+1,eof_date_this_id)
-                Zpenultimate <- lubridate::interval(eof_date_this_id-(2*z_days)+1,eof_date_this_id-z_days)
-                d.day <- NA
-                ### 'd' is the first day when the exposure status changes in the Z-day interval preceding Y
-                ### Note that if A(t-1)=j (exposed status) and A(t)=0/"not exposed" then the start of non-exposure status is defined as the first day of the Zlast interval when the unit is unexposed to any exposure levels
-                if(combined_data[intnum==t.int, (exposure == 0 | exposure == exp_ref)]) { 
-                  #if(any(exp_start_this_id%within%Zlast)) {
-                    if(any(lubridate::int_start(Zlast)%within%lubridate::interval(exp0_int[,exp0Start],
-                                                                                  exp0_int[,exp0End]))) {
-                      d.day <- lubridate::int_start(Zlast)
-                    }
-                    else {
-                      d.day <- exp0_int[,exp0Start][exp0_int[,exp0Start]%within%Zlast][1]
-                    }
-                  #}
-                }
-                if(combined_data[intnum==t.int, (exposure == 1 | exposure != exp_ref)])  {
-                  if(exp_character){
-                    A.t <- combined_data[intnum==t.int,exposure]
-                    if(any(lubridate::int_start(Zlast)%within%lubridate::interval(exp_data_this_id[get(exp_level)==A.t,get(start_date_var)],
-                                                                                  exp_data_this_id[get(exp_level)==A.t,get(end_date_var)]))) {
-                      d.day <- lubridate::int_start(Zlast)
-                    }
-                    else {
-                      exp_j_start_this_id <- exp_data_this_id[get(exp_level)==A.t,get(start_date_var)]
-                      d.day <- exp_j_start_this_id[exp_j_start_this_id%within%Zlast][1]
-                    }
-                  } else {
-                    if(any(lubridate::int_start(Zlast)%within%lubridate::interval(exp_data_this_id[,get(start_date_var)],
-                                                                                  exp_data_this_id[,get(end_date_var)]))) {
-                      d.day <- lubridate::int_start(Zlast)
-                    }
-                    else {
-                      d.day <- exp_start_this_id[exp_start_this_id%within%Zlast][1]
-                    }
-                  }
-                }
-                d.day <- d.day - cov_acute
-                if(is.na(d.day)) d.day <- int_end(Zpenultimate)  ### If d day doesn't exist then we simply set the interval end to the end of Zpenultimate ### ATTENTION: Discovered that may have to set d.day to last day in Zpenultimate if there is no first day in exposure change in Zlast based on observing GS
-                Zpenultimate.to.d.day <- lubridate::interval(lubridate::int_start(Zpenultimate),d.day)
-                ### L(t) is set to the last measurement in 'Zpenultimate' strictly after the date when L(t-1) is measured; so, modifying Zpenultimate to begin with (L(t-1) date + 1) if L(t) exists, or either in 'Zlast' up to and including (cov_acute==FALSE), or not including, day 'd' in Zlast
-                if(!is.na(combined_data[intnum==t.int-1,get(cov_name)])) lubridate::int_start(Zpenultimate.to.d.day) <- combined_data[intnum==t.int-1,get(cov_date)] + 1
-                # ### ATTENTION: Found bug with logic for case 14 - I feel L(t) should be set to the last measurment in 'Zpenultimate' strictly after the date when L(t-1) is measured or strictly after date of the last non-missing measurment
-                if(any(combined_data[!is.na(get(cov_date)) & intnum<t.int,get(cov_date)]%within%Zpenultimate)){
-                  Zpenultimate.modified.start <- tail(combined_data[!is.na(get(cov_date)) & intnum<t.int,get(cov_date)][combined_data[!is.na(get(cov_date)) & intnum<t.int,get(cov_date)]%within%Zpenultimate],1) + 1
-                  lubridate::int_start(Zpenultimate.to.d.day) <- Zpenultimate.modified.start
-                }
-                if(any(cov_dates_this_id%within%Zpenultimate.to.d.day)){
-                  combined_data[intnum==t.int,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%Zpenultimate.to.d.day],1)]
-                  combined_data[intnum==t.int,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%Zpenultimate.to.d.day],1)]
-                }
-                else{
-                  combined_data[intnum==t.int,eval(cov_date):=NA]
-                  combined_data[intnum==t.int,eval(cov_name):=NA]
-                }
-                
-                ### L(t+1) assignment
-                interval.start <- dplyr::if_else(is.na(combined_data[intnum==t.int,get(cov_date)]), max(lubridate::as_date(lubridate::int_end(Zpenultimate.to.d.day))+1, combined_data[!is.na(get(cov_date)) & intnum<t.int,][.N,get(cov_date)+1]), combined_data[intnum==t.int,get(cov_date)]+1) ### interval.start is strictly after the date when L(t) is measured, if L(t) is present, or, else,(strictly after the first day the exposure changes(i.e. cov_acute==FALSE) or on or after the first day when the exposure changes(i.e. cov_acute==TRUE))
-                interval.end <- eof_date_this_id
-                interval.final <- lubridate::interval(interval.start,interval.end)
-                if(any(cov_dates_this_id%within%interval.final)){
-                  combined_data[intnum==t.int+1,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
-                  combined_data[intnum==t.int+1,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
-                }
-                else{
-                  combined_data[intnum==t.int+1,eval(cov_date):=NA]
-                  combined_data[intnum==t.int+1,eval(cov_name):=NA]
-                }
-              }
-            }
-            
-            ## subject-specific output
-            #combined_data[, "case_"%+%cov_name := as.numeric(case)]
-            combined_data[, case:= as.numeric(case)]
-            combined_data[, `:=`(exp_change = NULL, part1 = NULL)] #, case = NULL
-
-            return(combined_data)
-        })  # END: loop over subjects
+            # iterative over subject IDs in parallel to assign L(t)
+            data_assigned_lt_by_id <-
+              future.apply::future_lapply(unique(outcome_data[, get(id_var)]),
+                                          #lapply(unique(outcome_data[, get(id_var)]),
+                                          function(id) {
+                                            ## message(paste("Current ID:", id))
+                                            # subset to just the current subject
+                                            index_cov_this_id <- cohort_data[get(id_var) == id, get(cov_name)]
+                                            index_date_this_id <- cohort_data[get(id_var) == id, get(index_date_var)]
+                                            eof_date_this_id <- lubridate::ymd(cohort_data[get(id_var) == id, get(eof_date_var)])
+                                            exp_data_this_id <- exp_data[get(id_var) == id, ]
+                                            exp_start_this_id <- lubridate::ymd(exp_data_this_id[, get(start_date_var)])
+                                            cov_data_this_id <- cov_data$data[get(id_var) == id, ]
+                                            cov_dates_this_id <- cov_data_this_id[,get(cov_date)]
+                                            cov_values_this_id <- cov_data_this_id[,get(cov_name)]
+                                            cov_data_this_id[, cov_date := lubridate::ymd(get(cov_date))]
+                                            exp_character <- is.character(exp_data[,get(A_level)])
+                                            exp_ref <- private$.exp_data$exp_ref
+                                            exp_level <- private$.exp_data$exp_level
+                                            # keep only the time-dependent values strictly after index date:
+                                            cov_data_this_id <-
+                                              cov_data_this_id[eval(cov_date) > index_date_this_id, ]
+                                            outcome_data_this_id <- suppressWarnings(outcome_data[get(id_var) == id, ])
+                                            data.table::setnames(outcome_data_this_id, "case", "caseExp")
+                                            
+                                            # use intervals to check where time-dependent covariate falls
+                                            # overlap finding technique inspired by
+                                            # https://stackoverflow.com/questions/41132081/find-which-interval-row-in-a-data-frame-that-each-element-of-a-vector-belongs-in
+                                            overlaps <- outcome_data_this_id[data.table::data.table(cov_data_this_id),
+                                                                             on = .(intstart <= cov_date,
+                                                                                    intend >= cov_date)]
+                                            suppressWarnings(overlaps[, `:=`(intstart = NULL, intend = NULL, #i.ID = NULL, 
+                                                                             exposure = NULL, outcome = NULL, censor = NULL,
+                                                                             caseExp = NULL, tie = NULL, A0.warn = NULL)]) #, EOFtype = NULL)]
+                                            overlaps[, eval(eof_type_var):=NULL]
+                                            overlaps[,eval("i."%+%id_var):=NULL]
+                                            cov_data_this_id[, cov_date := NULL]
+                                            
+                                            # in general, L(t) is defined as occuring before the start of
+                                            # interval t (i.e., in bin t-1)
+                                            # a covariate occuring in bin 7 will most often be mapped to L(8)
+                                            if (nrow(outcome_data_this_id) > 1) {
+                                              overlaps[, intnum := intnum + 1]
+                                            }
+                                            
+                                            # use only most recent covariate measurement assigned to interval
+                                            overlaps <- overlaps[, .SD[which.max(get(cov_date))],
+                                                                 by = intnum]
+                                            
+                                            # combined (reduced) overlap data with outcomes data
+                                            combined_data <- merge(outcome_data_this_id, overlaps,
+                                                                   by = c(id_var, "intnum"), all.x = TRUE)
+                                            
+                                            # define Z days as the number of days in each interval
+                                            z_days <- unique(combined_data[, intend - intstart + 1])
+                                            
+                                            # add cases and flag indicating exposure change
+                                            # add flag indicating continous non-exposure so far
+                                            combined_data[, case := NA_character_]
+                                            combined_data[, exp_change :=
+                                                            (exposure != shift(exposure, n = 1L, type = "lag"))]
+                                            combined_data[1, exp_change := FALSE]
+                                            combined_data[intnum == 0 & (exposure == 1 | exposure!=exp_ref), exp_change := TRUE]
+                                            if(exp_character){
+                                              combined_data[,exposure_binary:=ifelse(exposure==exp_ref,0,1)]
+                                              combined_data[, part1 := !(cumsum(shift(exposure_binary,
+                                                                                      n = 1L, fill = 0,
+                                                                                      type = "lag")) > 0)]
+                                              combined_data$exposure_binary <- NULL
+                                            } else{
+                                              combined_data[, part1 := !(cumsum(shift(exposure,
+                                                                                      n = 1L, fill = 0,
+                                                                                      type = "lag")) > 0)]
+                                            }
+                                            
+                                            # case 1/2: t is the first and not the last interval and the unit is
+                                            #           unexposed (case 1) or exposed (case 2)
+                                            if (nrow(combined_data) > 1) {
+                                              # case 1: unexposed at t = 0
+                                              combined_data[part1 & intnum == 0 & (exposure == 0 | exposure == exp_ref), case := "1"]
+                                              combined_data[part1 & intnum == 0 & (exposure == 0 | exposure == exp_ref),
+                                                            eval(cov_name) := index_cov_this_id]
+                                              combined_data[part1 & intnum == 0 & (exposure == 0 | exposure == exp_ref),
+                                                            eval(cov_date) := index_date_this_id]
+                                              
+                                              # case 2: exposed at t = 0
+                                              combined_data[part1 & intnum == 0 & (exposure == 1 | exposure != exp_ref), case := "2"]
+                                              # cov_int_dates <- lubridate::ymd(overlaps[[cov_date]])
+                                              # NOTE: need to check whether first measurement after index date
+                                              # occurs prior to first exposure date
+                                              
+                                              if (combined_data[intnum == 0, case == "2"]) {
+                                                interval.final <- lubridate::interval(index_date_this_id+1,exp_start_this_id[1]-cov_acute)
+                                                if(exp_character) {
+                                                  At.0 <- combined_data[intnum==0,exposure]
+                                                  exp_start_j <- exp_data_this_id[get(exp_level)%in%At.0,get(start_date_var)][1]
+                                                  interval.final <- lubridate::interval(index_date_this_id+1,exp_start_j-cov_acute)
+                                                }
+                                                if(any(cov_dates_this_id%within%interval.final)){
+                                                  combined_data[intnum==0,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
+                                                  combined_data[intnum==0,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
+                                                } else {
+                                                  combined_data[intnum==0,eval(cov_date):=index_date_this_id]
+                                                  combined_data[intnum==0,eval(cov_name):=index_cov_this_id]
+                                                }
+                                              }
+                                            }
+                                            
+                                            # case 3/4: t is not the first interval or the last interval and
+                                            #           the unit does not change exposure status (case 3) or
+                                            #           does change exposure status (case 4)
+                                            if (any(combined_data$outcome == 1)) {
+                                              combined_data[!(intnum %in% c(0, .N-2, .N-1)) &
+                                                              exp_change == FALSE & part1 == TRUE, case := "3"]
+                                              combined_data[!(intnum %in% c(0, .N-2, .N-1)) &
+                                                              exp_change == TRUE & part1 == TRUE, case := "4"]
+                                            } else if (any(combined_data$censor == 1, na.rm = TRUE)) {
+                                              combined_data[!(intnum %in% c(0, .N-1)) & exp_change == FALSE
+                                                            & part1 == TRUE, case := "3"]
+                                              combined_data[!(intnum %in% c(0, .N-1)) & exp_change == TRUE
+                                                            & part1 == TRUE, case := "4"]
+                                            }
+                                            
+                                            if(any(combined_data$case %in% "4")){
+                                              t.int <- combined_data[case==4,intnum]
+                                              interval.start <- dplyr::if_else(is.na(combined_data[intnum==t.int-1,get(cov_name)]), combined_data[intnum==t.int-1,intstart], combined_data[intnum==t.int-1,get(cov_date)+1]) ### Check if there exists a date for L(t-1); if not, starting point is intstart date; otherwise, starting point is L(t-1) date + 1
+                                              
+                                              if(exp_character){
+                                                At <- combined_data[case==4,exposure]
+                                                ints_overlaps <- lubridate::interval(combined_data[case == "4", intstart],
+                                                                                     combined_data[case == "4", intend])
+                                                exp1_int <- lubridate::interval(exp_data_this_id[get(exp_level)%in%At, get(start_date_var)],
+                                                                                exp_data_this_id[get(exp_level)%in%At, get(end_date_var)])
+                                              } else{
+                                                ints_overlaps <- lubridate::interval(combined_data[case == "4", intstart],
+                                                                                     combined_data[case == "4", intend])
+                                                exp1_int <- lubridate::interval(exp_data_this_id[, get(start_date_var)],
+                                                                                exp_data_this_id[, get(end_date_var)])
+                                              }
+                                              
+                                              d1_case11 <- do.call("c", lapply(ints_overlaps, function(x) {
+                                                suppressWarnings(as_date(min(lubridate::int_start(lubridate::intersect(x, exp1_int)),
+                                                                             na.rm = TRUE)))
+                                              }))
+                                              interval.end <- d1_case11 - cov_acute
+                                              #interval.end <- exp_start_this_id[1] - cov_acute              
+                                              assigned_L <- cov_data_this_id[cov_data_this_id[, get(cov_date)]
+                                                                             %within% suppressWarnings(lubridate::interval(interval.start,interval.end)), ][, .SD[which.max(get(cov_date))]]              
+                                              if(nrow(assigned_L)==0) {
+                                                combined_data[case==4,eval(cov_name):=NA]
+                                                combined_data[case==4,eval(cov_date):=NA]
+                                              } else {
+                                                combined_data[case==4,eval(cov_name):=assigned_L[,get(cov_name)]]
+                                                combined_data[case==4,eval(cov_date):=assigned_L[,get(cov_date)]]
+                                              }
+                                            }
+                                            
+                                            # case 5/7: t is the last interval and the unit does not change
+                                            #           exposure status (case 5) or does change exposure status
+                                            #           (case 7) and a right-censoring event occurs. Either may
+                                            #           apply when t is the first and the last interval.
+                                            combined_data[intnum == .N - 1 & exp_change == FALSE
+                                                          & part1 == TRUE & censor == 1, case := "5"]
+                                            combined_data[intnum == .N - 1 & exp_change == TRUE
+                                                          & part1 == TRUE & censor == 1, case := "7"]
+                                            
+                                            if(any(combined_data$case %in% c("5","7"))) {
+                                              t.int <- combined_data[case%in%c("5","7"),intnum]
+                                              if(t.int==0){
+                                                interval.start <- index_date_this_id
+                                              } else{
+                                                interval.start <- dplyr::if_else(combined_data[intnum==t.int-1,is.na(get(cov_name)) & is.na(get(cov_date))], combined_data[intnum==t.int-1,intstart], combined_data[intnum==t.int-1,get(cov_date)+1]) ### Check if there exists a date and cov value for L(t-1); if not, starting point is intstart date, if yes, starting point is L(t-1) date + 1
+                                              }
+                                              interval.end <- eof_date_this_id[1]-cov_acute
+                                              interval.final <- lubridate::interval(interval.start,interval.end)
+                                              ### This case is particular to when t.int==0
+                                              cov_dates_this_id_t0_tmp <- c(index_date_this_id,cov_dates_this_id)
+                                              cov_values_this_id_t0_tmp <- c(index_cov_this_id,cov_values_this_id)
+                                              ### index date and value supersedes any covariate measurement on same day
+                                              cov_dates_this_id_t0 <- cov_dates_this_id_t0_tmp[!duplicated(cov_dates_this_id_t0_tmp)]
+                                              cov_values_this_id_t0 <- cov_values_this_id_t0_tmp[!duplicated(cov_dates_this_id_t0_tmp)]
+                                              if(any(cov_dates_this_id_t0%within%interval.final)){
+                                                combined_data[intnum==t.int,eval(cov_date):=tail(cov_dates_this_id_t0[cov_dates_this_id_t0%within%interval.final],1)]
+                                                combined_data[intnum==t.int,eval(cov_name):=tail(cov_values_this_id_t0[cov_dates_this_id_t0%within%interval.final],1)]
+                                              }
+                                              else{ ### L(t) is set to missing if no such measurements exists
+                                                combined_data[intnum==t.int,eval(cov_date):=NA]
+                                                combined_data[intnum==t.int,eval(cov_name):=NA]
+                                              }
+                                            }
+                                            #if (any(combined_data$case %in% c("5", "7")) && nrow(cov_data_this_id) > 0) {
+                                            # if (any(combined_data$case %in% c("7")) && nrow(cov_data_this_id) > 0) {
+                                            #   # simply overwrite the shifted covariate value and date with the
+                                            #   # last observed entry; it is fine to ignore whether the date goes
+                                            #   # past the censoring time since there should not be measurements
+                                            #   # after censoring, by definition.
+                                            #   #if (nrow(combined_data) == 1) {
+                                            #     #overwrite_last_cov <-
+                                            #       #which.min(abs(eof_date_this_id -
+                                            #                     #cov_data_this_id[[cov_date]]))
+                                            #     #overwrite_cov <- cov_data_this_id[overwrite_last_cov,
+                                            #                                       #..cov_name]
+                                            #     #overwrite_date <- cov_data_this_id[overwrite_last_cov,
+                                            #                                        #..cov_date]
+                                            #     #combined_data[case %in% c("5", "7"),
+                                            #                   #eval(cov_name) := overwrite_cov]
+                                            #     #combined_data[case %in% c("5", "7"),
+                                            #                   #eval(cov_date) := overwrite_date]
+                                            #   #} else {
+                                            #     eof_int <- combined_data[eof_date_this_id %within%
+                                            #                              lubridate::interval(intstart, intend), intnum]
+                                            #     prev_intstart <- combined_data[intnum == eof_int - 1, intstart]
+                                            #     overwrite_last_cov <-
+                                            #       which.min(abs(eof_date_this_id -
+                                            #                     cov_data_this_id[[cov_date]]))
+                                            #     overwrite_date <- cov_data_this_id[overwrite_last_cov,
+                                            #                                        ..cov_date]
+                                            #     check_prev_int <- lubridate::as_date(overwrite_date[[1]]) > prev_intstart
+                                            #     if (isTRUE(check_prev_int)) {
+                                            #       overwrite_cov <- cov_data_this_id[overwrite_last_cov,
+                                            #                                         ..cov_name]
+                                            #       combined_data[case %in% c("5", "7"),
+                                            #                     eval(cov_name) := overwrite_cov]
+                                            #       combined_data[case %in% c("5", "7"),
+                                            #                     eval(cov_date) := overwrite_date]
+                                            #     }
+                                            #   #}
+                                            # }
+                                            
+                                            # case 6/8: t is the last interval and the unit does not change
+                                            #           exposure status (case 6) or does change exposure status
+                                            #           (case 8) and the outcome event occurs. Either may apply
+                                            #           when t is the first and the last interval.
+                                            # NOTE: when there's an outcome, there exists an artificial last row
+                                            #       note also that `intnum` is zero-indexed so need to use .N-2
+                                            #       to catch the actually last observed data row.
+                                            if (any(combined_data$outcome == 1)) {
+                                              combined_data[intnum == .N-2 & exp_change == FALSE &
+                                                              part1 == TRUE, case := "6"]
+                                              combined_data[intnum == .N-2 & exp_change == TRUE &
+                                                              part1 == TRUE, case := "8"]
+                                            }
+                                            
+                                            if (any(combined_data$case %in% "8") & first_exp_rule==1) {
+                                              ### L(t) assignment
+                                              t.int <- combined_data[case==8,intnum]
+                                              interval.start <- dplyr::if_else(is.na(combined_data[intnum==t.int-1,get(cov_name)]), combined_data[intnum==t.int-1,intstart], combined_data[intnum==t.int-1,get(cov_date)+1]) ### Check if there exists an assigned date for L(t-1); if not, starting point is intstart date; otherwise, starting point is L(t-1) date + 1
+                                              if(t.int==0) interval.start <- index_date_this_id ### For t.int=0, the start of the interval is index date
+                                              if(exp_character){
+                                                At <- combined_data[intnum==t.int,exposure]
+                                                exp_start_j <- exp_data_this_id[get(exp_level)%in%At,get(start_date_var)][1]
+                                                interval.end <- exp_start_j-cov_acute
+                                                interval.final <- lubridate::interval(interval.start,interval.end)
+                                              } else{
+                                                interval.end <- exp_start_this_id[1] - cov_acute
+                                                interval.final <- lubridate::interval(interval.start,interval.end)
+                                              }
+                                              ### This case is particular to when t.int==0
+                                              cov_dates_this_id_t0_tmp <- c(index_date_this_id,cov_dates_this_id)
+                                              cov_values_this_id_t0_tmp <- c(index_cov_this_id,cov_values_this_id)
+                                              ### index date and value supersedes any covariate measurement on same day
+                                              cov_dates_this_id_t0 <- cov_dates_this_id_t0_tmp[!duplicated(cov_dates_this_id_t0_tmp)]
+                                              cov_values_this_id_t0 <- cov_values_this_id_t0_tmp[!duplicated(cov_dates_this_id_t0_tmp)]
+                                              if(t.int==0){
+                                                if(any(cov_dates_this_id_t0%within%interval.final)){
+                                                  combined_data[intnum==t.int,eval(cov_date):=tail(cov_dates_this_id_t0[cov_dates_this_id_t0%within%interval.final],1)]
+                                                  combined_data[intnum==t.int,eval(cov_name):=tail(cov_values_this_id_t0[cov_dates_this_id_t0%within%interval.final],1)]
+                                                } else if(interval.start>interval.end){
+                                                  combined_data[intnum==t.int,eval(cov_date):=index_date_this_id]
+                                                  combined_data[intnum==t.int,eval(cov_name):=index_cov_this_id]
+                                                } else { 
+                                                  combined_data[intnum==t.int,eval(cov_date):=NA]
+                                                  combined_data[intnum==t.int,eval(cov_name):=NA]
+                                                }
+                                              }
+                                              else {
+                                                if(any(cov_dates_this_id%within%interval.final)){
+                                                  combined_data[intnum==t.int,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
+                                                  combined_data[intnum==t.int,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
+                                                }
+                                                else{ ### L(t) is set to missing if no such measurements exists
+                                                  combined_data[intnum==t.int,eval(cov_date):=NA]
+                                                  combined_data[intnum==t.int,eval(cov_name):=NA]
+                                                }
+                                              }
+                                              
+                                              ### L(t+1) assignment
+                                              #is.na(combined_data[intnum==t.int,get(cov_date)])
+                                              #acute.exp.date <- dplyr::if_else(cov_acute,exp_start_this_id,exp_start_this_id+1)
+                                              acute.exp.date <- exp_start_this_id[1]+!cov_acute
+                                              interval.start <- dplyr::if_else(is.na(combined_data[intnum==t.int,get(cov_date)]), acute.exp.date, combined_data[intnum==t.int,get(cov_date)]+1) ### interval.start is strictly after the date when L(t) is measured, if L(t) is present, or, else,(strictly after the first day the exposure changes(i.e. cov_acute==FALSE) or on or after the first day when the exposure changes(i.e. cov_acute==TRUE))
+                                              interval.end <- eof_date_this_id
+                                              interval.final <- lubridate::interval(interval.start,interval.end)
+                                              if(any(cov_dates_this_id%within%interval.final)){
+                                                combined_data[intnum==t.int+1,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
+                                                combined_data[intnum==t.int+1,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
+                                              }
+                                              else{
+                                                combined_data[intnum==t.int+1,eval(cov_date):=NA]
+                                                combined_data[intnum==t.int+1,eval(cov_name):=NA]
+                                              }
+                                            }
+                                            
+                                            # NOTE: cases 5--8 all apply the same logic when there is just a
+                                            #       single observed interval --- that is, replace w/e the
+                                            #       currently assigned values with closest values prior to the
+                                            #       failure/censoring date, inclusive of index measurements
+                                            if (nrow(combined_data) == 1 & !(any(combined_data[intnum==0,case]==c("5","7","8")))) { ### excluding cases 5,7, 8 because code above accounts for value assignmentat t=0
+                                              index_entry <- list(id_var = id, cov_name = index_cov_this_id,
+                                                                  cov_date = index_date_this_id)
+                                              names(index_entry) <- c(id_var, cov_name, cov_date)
+                                              index_cov_data_this_id <-
+                                                data.table::rbindlist(list(index_entry, cov_data_this_id),
+                                                                      use.names = TRUE)
+                                              index_overwrite <- index_cov_data_this_id[get(cov_date) <
+                                                                                          eof_date_this_id]
+                                              index_overwrite <-
+                                                index_overwrite[, .SD[which.max(get(cov_date))]]
+                                              combined_data[, eval(cov_name) := index_overwrite[[cov_name]]]
+                                              combined_data[, eval(cov_date) := index_overwrite[[cov_date]]]
+                                            }
+                                            
+                                            # NOTE: now, we're in "part 2", defined only as all intervals that
+                                            #       follow the first period in which exposure status changes
+                                            # part II has two case types: 1) last bin (cases 12-14), 2) not a
+                                            # last bin (cases 10-11)
+                                            
+                                            # case 10/11: t is not the last interval and the unit does not
+                                            #             change exposure status (like case 3) or does change
+                                            #             exposure status (like case 4)
+                                            if (any(combined_data$censor == 1, na.rm = TRUE)) {
+                                              combined_data[intnum != .N-1 & exp_change == FALSE &
+                                                              part1 == FALSE, case := "10"]
+                                              combined_data[intnum != .N-1 & exp_change == TRUE &
+                                                              part1 == FALSE, case := "11"]
+                                            } else {
+                                              # NOTE: again, note that the last row of observed data is .N-2,
+                                              #       but there's an artificial last row absent censoring, so
+                                              #       we need to ignore both .N-2 and .N-1 here...
+                                              combined_data[!(intnum %in% c(.N-2, .N-1)) &
+                                                              exp_change == FALSE & part1 == FALSE, case := "10"]
+                                              combined_data[!(intnum %in% c(.N-2, .N-1)) & exp_change == TRUE &
+                                                              part1 == FALSE, case := "11"]
+                                            }
+                                            if(z_days!=1){
+                                              if(any(combined_data$case %in% c("10","11"))){
+                                                t.int <- combined_data[case%in%c("10","11"),intnum]
+                                                for(t.i in t.int){
+                                                  t.i.case <- combined_data[intnum==t.i,case]
+                                                  if(t.i.case==10){
+                                                    interval.start <- dplyr::if_else(combined_data[intnum==t.i-1,is.na(get(cov_name)) & is.na(get(cov_date))], combined_data[intnum==t.i-1,intstart], combined_data[intnum==t.i-1,get(cov_date)+1]) ### Check if there exists a date for L(t-1); if not, starting point is intstart date, if yes, starting point is L(t-1) date + 1
+                                                    interval.end <- combined_data[intnum==t.i-1,intend]
+                                                    interval.final <- lubridate::interval(interval.start,interval.end)
+                                                    if(any(cov_dates_this_id%within%interval.final)){
+                                                      combined_data[intnum==t.i,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
+                                                      combined_data[intnum==t.i,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
+                                                    }
+                                                    else{ ### L(t) is set to missing if no such measurements exists
+                                                      combined_data[intnum==t.i,eval(cov_date):=NA]
+                                                      combined_data[intnum==t.i,eval(cov_name):=NA]
+                                                    }
+                                                  }
+                                                  else{
+                                                    interval.start <- dplyr::if_else(combined_data[intnum==t.i-1,is.na(get(cov_name)) & is.na(get(cov_date))], combined_data[intnum==t.i-1,intstart], combined_data[intnum==t.i-1,get(cov_date)+1]) ### Check if there exists a date for L(t-1); if not, starting point is intstart date, if yes, starting point is L(t-1) date + 1
+                                                    ints_overlaps <- lubridate::interval(combined_data[intnum == t.i, intstart],
+                                                                                         combined_data[intnum == t.i, intend])
+                                                    A.t <- combined_data[intnum==t.i,exposure]
+                                                    exp1_int <- lubridate::interval(exp_data_this_id[get(exp_level)==A.t, get(start_date_var)],
+                                                                                    exp_data_this_id[get(exp_level)==A.t, get(end_date_var)])
+                                                    exp0_int <-
+                                                      data.table::data.table(exp0Start = exp_data_this_id[, get(end_date_var)] + 1,
+                                                                             exp0End = shift(exp_data_this_id[, get(start_date_var) - 1],
+                                                                                             n = 1L, fill = eof_date_this_id,
+                                                                                             type = "lead"))
+                                                    exp0_int <-
+                                                      rbind(data.table::data.table(exp0Start = index_date_this_id,
+                                                                                   exp0End = exp_data_this_id[1, get(start_date_var) - 1]),
+                                                            exp0_int)
+                                                    exp0_int <- exp0_int[exp0End>=exp0Start]
+                                                    ### Final intervals of non-exposure dates
+                                                    exp0_int <- lubridate::interval(exp0_int[,exp0Start],exp0_int[,exp0End])
+                                                    
+                                                    d1_case11 <- do.call("c", lapply(ints_overlaps, function(x) {
+                                                      suppressWarnings(as_date(min(lubridate::int_start(lubridate::intersect(x, exp1_int)),
+                                                                                   na.rm = TRUE)))
+                                                    }))
+                                                    d0_case11 <- do.call("c", lapply(ints_overlaps, function(x) {
+                                                      suppressWarnings(as_date(min(lubridate::int_start(lubridate::intersect(x, exp0_int)),
+                                                                                   na.rm = TRUE)))
+                                                    }))
+                                                    d_case11 <-
+                                                      dplyr::if_else(combined_data[intnum == t.i, (exposure == 0 | exposure == exp_ref)], #dplyr::if_else(combined_data[case == "11", exposure] == 0,
+                                                                     d0_case11, d1_case11)
+                                                    ### Note that if A(t-1)=j (exposed status) and A(t)=0/"not exposed" then the start
+                                                    ### of the non-exposure status  is defined as the first day of the interval when the
+                                                    ### unit is unexposed to any exposure levels. If the patients is always exposed during
+                                                    ### the interval then the start of non-exposure is defined as the first day of the interval
+                                                    ### by default. (i.e. if d_case11 is NA then we use the start of the interval as day d)
+                                                    if(is.na(as.character(d_case11))) d_case11 <- combined_data[intnum==t.i,intstart]
+                                                    interval.end <- d_case11 - cov_acute
+                                                    interval.final <- lubridate::interval(interval.start,interval.end)
+                                                    if(any(cov_dates_this_id%within%interval.final)){
+                                                      combined_data[intnum==t.i,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
+                                                      combined_data[intnum==t.i,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
+                                                    }
+                                                    else{ ### L(t) is set to missing if no such measurements exists
+                                                      combined_data[intnum==t.i,eval(cov_date):=NA]
+                                                      combined_data[intnum==t.i,eval(cov_name):=NA]
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            } else {
+                                              if(any(combined_data$case %in% "10")){
+                                                t.int <- combined_data[case==10,intnum][1]
+                                                if(exp_character) t.int <- combined_data[exposure!=exp_ref & case==10,intnum][1]
+                                                interval.start <- dplyr::if_else(combined_data[intnum==t.int-1,is.na(get(cov_name)) & is.na(get(cov_date))], combined_data[intnum==t.int-1,intstart], combined_data[intnum==t.int-1,get(cov_date)+1]) ### Check if there exists a date for L(t-1); if not, starting point is intstart date, if yes, starting point is L(t-1) date + 1
+                                                interval.end <- combined_data[intnum==t.int-1,intend]
+                                                interval.final <- lubridate::interval(interval.start,interval.end)
+                                                if(any(cov_dates_this_id%within%interval.final)){
+                                                  combined_data[intnum==t.int,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
+                                                  combined_data[intnum==t.int,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
+                                                }
+                                                else{ ### L(t) is set to missing if no such measurements exists
+                                                  combined_data[intnum==t.int,eval(cov_date):=NA]
+                                                  combined_data[intnum==t.int,eval(cov_name):=NA]
+                                                }
+                                              }
+                                              # Case 11 is similar to case 2:
+                                              if (any(combined_data$case %in% "11")) {
+                                                ints_overlaps <- lubridate::interval(combined_data[case == "11", intstart],
+                                                                                     combined_data[case == "11", intend])
+                                                exp1_int <- lubridate::interval(exp_data_this_id[, get(start_date_var)],
+                                                                                exp_data_this_id[, get(end_date_var)])
+                                                exp0_int <-
+                                                  data.table::data.table(exp0Start = exp_data_this_id[, get(end_date_var)] + 1,
+                                                                         exp0End = shift(exp_data_this_id[, get(start_date_var) - 1],
+                                                                                         n = 1L, fill = eof_date_this_id,
+                                                                                         type = "lead"))
+                                                exp0_int <-
+                                                  rbind(data.table::data.table(exp0Start = index_date_this_id,
+                                                                               exp0End = exp_data_this_id[1, get(start_date_var) - 1]),
+                                                        exp0_int)
+                                                exp0_int <- exp0_int[exp0End>=exp0Start]
+                                                ### Final intervals of non-exposure dates
+                                                exp0_int <- lubridate::interval(exp0_int[,exp0Start],exp0_int[,exp0End])
+                                                
+                                                d1_case11 <- do.call("c", lapply(ints_overlaps, function(x) {
+                                                  suppressWarnings(as_date(min(lubridate::int_start(lubridate::intersect(x, exp1_int)),
+                                                                               na.rm = TRUE)))
+                                                }))
+                                                d0_case11 <- do.call("c", lapply(ints_overlaps, function(x) {
+                                                  suppressWarnings(as_date(min(lubridate::int_start(lubridate::intersect(x, exp0_int)),
+                                                                               na.rm = TRUE)))
+                                                }))
+                                                d_case11 <-
+                                                  dplyr::if_else(combined_data[case == "11", (exposure == 0 | exposure == exp_ref)], #dplyr::if_else(combined_data[case == "11", exposure] == 0,
+                                                                 d0_case11, d1_case11)
+                                                # If cov_acute=TRUE, we should not look for covariates measured on day d
+                                                # Ltm1_tint <- combined_data[case==11,intnum-1]
+                                                # combined_data[intnum%in%Ltm1_tint & is.na(get(cov_date)),Ltm1_instart:=intstart]
+                                                # combined_data[intnum%in%Ltm1_tint & !is.na(get(cov_date)),Ltm1_instart:=get(cov_date)+1]
+                                                # combined_data[,Ltm1_instart:=shift(Ltm1_instart, n = 1L, type = "lag")]
+                                                ints_overlaps <- lubridate::interval(combined_data[case == "11", intstart], ### ATTENTION: ints_overlaps has to include previous interval strictly after when L(t-1) is measured; right now, it's starting at current interval
+                                                                                     d_case11 - cov_acute)
+                                                # ints_overlaps <- interval(combined_data[case == "11", Ltm1_instart], d_case11 - cov_acute) ### ATTENTION: Trying to implement a fix here that accounts for starting at the previous interval
+                                                overwrite_cov <- rbindlist(lapply(ints_overlaps, function(x)
+                                                  cov_data_this_id[cov_data_this_id[, get(cov_date)]
+                                                                   %within% x, ][, .SD[which.max(get(cov_date))]]),
+                                                  idcol = TRUE)
+                                                overwrite_cov[, intnum := combined_data[case == "11",
+                                                                                        intnum][overwrite_cov[, .id]]]
+                                                ## Overwrite index covariate value with the one before exposure
+                                                combined_data[intnum %in% overwrite_cov$intnum,
+                                                              eval(cov_name) := overwrite_cov[[cov_name]]]
+                                                combined_data[intnum %in% overwrite_cov$intnum,
+                                                              eval(cov_date) := overwrite_cov[[cov_date]]]
+                                                ## The value used for overwriting was stored in next interval
+                                                ## remove it since used now in current interval
+                                                #combined_data[intnum %in% (overwrite_cov$intnum+1),
+                                                #            eval(cov_name) := NA_real_]
+                                                #combined_data[intnum %in% (overwrite_cov$intnum+1),
+                                                #            eval(cov_date) := ymd(NA_real_)]
+                                                combined_data[!is.na(get(cov_date)),duplicated:=duplicated(get(cov_date))]
+                                                combined_data[duplicated%in%TRUE,eval(cov_date):=NA]
+                                                combined_data[duplicated%in%TRUE,eval(cov_name):=NA]
+                                                combined_data[,duplicated:=NULL]
+                                              }
+                                            }
+                                            
+                                            # case 12/13/14: t is the last interval and the unit experiences a
+                                            #                right-censoring event (case 12), or does not change
+                                            #                exposure status and the outcome event occurs (case
+                                            #                13), or does change exposure status and the outcome
+                                            #                event occurs (case 14)
+                                            
+                                            # first, handle case 12, since most trivial (NOTE: use .N-1 here as
+                                            # there is no artificial final row when censoring occurs)
+                                            combined_data[intnum == .N-1 & part1 == FALSE & censor == 1,
+                                                          case := "12"]
+                                            
+                                            if (any(combined_data$case %in% "12")){
+                                              int.start <- dplyr::if_else(is.na(lubridate::ymd(combined_data[.N-1, get(cov_date)])), lubridate::ymd(combined_data[.N-1, intstart]), lubridate::ymd(combined_data[.N-1, get(cov_date)+1]))
+                                              int.end <- eof_date_this_id-cov_acute
+                                              
+                                              assigned_L <- cov_data_this_id[cov_data_this_id[, get(cov_date)]
+                                                                             %within% suppressWarnings(lubridate::interval(int.start,int.end)), ][, .SD[which.max(get(cov_date))]]
+                                              
+                                              if(nrow(assigned_L)==0) {
+                                                combined_data[case==12,eval(cov_name):=NA]
+                                                combined_data[case==12,eval(cov_date):=NA]
+                                              } else {
+                                                combined_data[case==12,eval(cov_name):=assigned_L[,get(cov_name)]]
+                                                combined_data[case==12,eval(cov_date):=assigned_L[,get(cov_date)]]
+                                              }
+                                              
+                                            }
+                                            
+                                            # now, it gets a bit more complicated with cases 13 and 14...
+                                            # let Z be the number of days in each interval and call the Z-day
+                                            # interval before the event 'Zlast' and the preceding Z-day
+                                            # interval 'Zpenultimate'
+                                            if (combined_data[.N, outcome] == 1) {
+                                              combined_data[intnum == .N-2 & exp_change == FALSE &
+                                                              part1 == FALSE, case := "13"]
+                                              combined_data[intnum == .N-2 & exp_change == TRUE &
+                                                              part1 == FALSE, case := "14"]
+                                            }
+                                            
+                                            if(any(combined_data$case %in% "13") | (any(combined_data$case %in% "6") & first_exp_rule==0)){ 
+                                              t.int <- combined_data[case==13 | case==6, intnum]
+                                              if(t.int!=0){
+                                                Zpenultimate <- lubridate::interval(eof_date_this_id-(2*z_days)+1,eof_date_this_id-z_days)
+                                                Zlast <- lubridate::interval(eof_date_this_id-z_days+1,eof_date_this_id)
+                                                ### L(t) is set to the last measurement in 'Zpenultimate' strictly after the date when L(t-1) is measured; so, modifying Zpenultimate to begin with (L(t-1) date + 1) if L(t) exists
+                                                if(!is.na(combined_data[intnum==t.int-1,get(cov_name)])) lubridate::int_start(Zpenultimate) <- combined_data[intnum==t.int-1,get(cov_date)] + 1
+                                                ### ATTENTION: Found bug with logic for case 13 - I feel L(t) should be set to the last measurment in 'Zpenultimate' strictly after the date when L(t-1) is measured or strictly after date of the last non-missing measurment
+                                                if(any(combined_data[!is.na(get(cov_date)) & intnum<t.int,get(cov_date)]%within%Zpenultimate)){
+                                                  Zpenultimate.modified.start <- combined_data[!is.na(get(cov_date)) & intnum<t.int,get(cov_date)][combined_data[!is.na(get(cov_date)) & intnum<t.int,get(cov_date)]%within%Zpenultimate] + 1
+                                                  lubridate::int_start(Zpenultimate) <- Zpenultimate.modified.start 
+                                                }
+                                                if(any(cov_dates_this_id%within%Zpenultimate)){  
+                                                  combined_data[intnum==t.int,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%Zpenultimate],1)]
+                                                  combined_data[intnum==t.int,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%Zpenultimate],1)]
+                                                } else{
+                                                  combined_data[intnum==t.int,eval(cov_date):=NA]
+                                                  combined_data[intnum==t.int,eval(cov_name):=NA]
+                                                }
+                                                
+                                                ### L(t+1) assignment
+                                                interval.start <- dplyr::if_else(is.na(combined_data[intnum==t.int,get(cov_date)]), max(lubridate::as_date(lubridate::int_end(Zpenultimate))+1, combined_data[!is.na(get(cov_date)) & intnum<t.int,][.N,get(cov_date)+1]), combined_data[intnum==t.int,get(cov_date)]+1) ### interval.start is strictly after the date when L(t) is measured, if L(t) is present, or, else,(strictly after the first day the exposure changes(i.e. cov_acute==FALSE) or on or after the first day when the exposure changes(i.e. cov_acute==TRUE))
+                                                interval.end <- eof_date_this_id
+                                                interval.final <- lubridate::interval(interval.start,interval.end)
+                                                if(any(cov_dates_this_id%within%interval.final)){
+                                                  combined_data[intnum==t.int+1,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
+                                                  combined_data[intnum==t.int+1,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
+                                                } else{
+                                                  combined_data[intnum==t.int+1,eval(cov_date):=NA]
+                                                  combined_data[intnum==t.int+1,eval(cov_name):=NA]
+                                                }
+                                              }
+                                            }
+                                            
+                                            if(any(combined_data$case %in% "14") | (any(combined_data$case %in% "8") & first_exp_rule==0)){
+                                              t.int <- combined_data[case==14 | case==8, intnum]
+                                              if(any(combined_data$case %in% "8") & t.int==0){ ### Particular case for when case==8 and t.int==0
+                                                interval.start <- index_date_this_id
+                                                if(exp_character){
+                                                  At <- combined_data[intnum==t.int,exposure]
+                                                  exp_start_j <- exp_data_this_id[get(exp_level)%in%At,get(start_date_var)][1]
+                                                  interval.end <- exp_start_j-cov_acute
+                                                } else{
+                                                  interval.end <- exp_start_this_id[1]-cov_acute
+                                                }
+                                                interval.final <- lubridate::interval(interval.start,interval.end)
+                                                ### This case is particular to when t.int==0
+                                                cov_dates_this_id_t0_tmp <- c(index_date_this_id,cov_dates_this_id)
+                                                cov_values_this_id_t0_tmp <- c(index_cov_this_id,cov_values_this_id)
+                                                ### index date and value supersedes any covariate measurement on same day
+                                                cov_dates_this_id_t0 <- cov_dates_this_id_t0_tmp[!duplicated(cov_dates_this_id_t0_tmp)]
+                                                cov_values_this_id_t0 <- cov_values_this_id_t0_tmp[!duplicated(cov_dates_this_id_t0_tmp)]
+                                                if(any(cov_dates_this_id_t0%within%interval.final)){
+                                                  combined_data[intnum==t.int,eval(cov_date):=tail(cov_dates_this_id_t0[cov_dates_this_id_t0%within%interval.final],1)]
+                                                  combined_data[intnum==t.int,eval(cov_name):=tail(cov_values_this_id_t0[cov_dates_this_id_t0%within%interval.final],1)]
+                                                } else if(interval.start>interval.end) { ## if d=index date and cov_acute=TRUE, then L(t) is set to the measurment on the index date (if this is true then interval.start>interval.end)
+                                                  combined_data[intnum==t.int,eval(cov_date):=index_date_this_id]
+                                                  combined_data[intnum==t.int,eval(cov_name):=index_cov_this_id]
+                                                } else {
+                                                  combined_data[intnum==0,eval(cov_date):=NA]
+                                                  combined_data[intnum==0,eval(cov_name):=NA]
+                                                }
+                                                ### L(t+1) assignment
+                                                interval.start <- dplyr::if_else(is.na(combined_data[intnum==t.int,get(cov_date)]), exp_start_this_id[1]+!cov_acute, combined_data[intnum==t.int,get(cov_date)]+1) ### interval.start is strictly after the date when L(t) is measured, if L(t) is present, or; else,(strictly after the first day the exposure changes(i.e. cov_acute==FALSE) or on or after the first day when the exposure changes(i.e. cov_acute==TRUE))
+                                                interval.end <- eof_date_this_id
+                                                interval.final <- lubridate::interval(interval.start,interval.end)
+                                                if(any(cov_dates_this_id%within%interval.final)){
+                                                  combined_data[intnum==t.int+1,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
+                                                  combined_data[intnum==t.int+1,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
+                                                }
+                                                else{
+                                                  combined_data[intnum==t.int+1,eval(cov_date):=NA]
+                                                  combined_data[intnum==t.int+1,eval(cov_name):=NA]
+                                                }
+                                              }
+                                              else {
+                                                exp0_int <-
+                                                  data.table::data.table(exp0Start = exp_data_this_id[, get(end_date_var)] + 1,
+                                                                         exp0End = shift(exp_data_this_id[, get(start_date_var) - 1],
+                                                                                         n = 1L, fill = eof_date_this_id,
+                                                                                         type = "lead"))
+                                                exp0_int <-
+                                                  rbind(data.table::data.table(exp0Start = index_date_this_id,
+                                                                               exp0End = exp_data_this_id[1, get(start_date_var) - 1]),
+                                                        exp0_int)
+                                                exp0_int <- exp0_int[exp0End>=exp0Start]
+                                                
+                                                Zlast <- lubridate::interval(eof_date_this_id-z_days+1,eof_date_this_id)
+                                                Zpenultimate <- lubridate::interval(eof_date_this_id-(2*z_days)+1,eof_date_this_id-z_days)
+                                                d.day <- NA
+                                                ### 'd' is the first day when the exposure status changes in the Z-day interval preceding Y
+                                                ### Note that if A(t-1)=j (exposed status) and A(t)=0/"not exposed" then the start of non-exposure status is defined as the first day of the Zlast interval when the unit is unexposed to any exposure levels
+                                                if(combined_data[intnum==t.int, (exposure == 0 | exposure == exp_ref)]) { 
+                                                  #if(any(exp_start_this_id%within%Zlast)) {
+                                                  if(any(lubridate::int_start(Zlast)%within%lubridate::interval(exp0_int[,exp0Start],
+                                                                                                                exp0_int[,exp0End]))) {
+                                                    d.day <- lubridate::int_start(Zlast)
+                                                  }
+                                                  else {
+                                                    d.day <- exp0_int[,exp0Start][exp0_int[,exp0Start]%within%Zlast][1]
+                                                  }
+                                                  #}
+                                                }
+                                                if(combined_data[intnum==t.int, (exposure == 1 | exposure != exp_ref)])  {
+                                                  if(exp_character){
+                                                    A.t <- combined_data[intnum==t.int,exposure]
+                                                    if(any(lubridate::int_start(Zlast)%within%lubridate::interval(exp_data_this_id[get(exp_level)==A.t,get(start_date_var)],
+                                                                                                                  exp_data_this_id[get(exp_level)==A.t,get(end_date_var)]))) {
+                                                      d.day <- lubridate::int_start(Zlast)
+                                                    }
+                                                    else {
+                                                      exp_j_start_this_id <- exp_data_this_id[get(exp_level)==A.t,get(start_date_var)]
+                                                      d.day <- exp_j_start_this_id[exp_j_start_this_id%within%Zlast][1]
+                                                    }
+                                                  } else {
+                                                    if(any(lubridate::int_start(Zlast)%within%lubridate::interval(exp_data_this_id[,get(start_date_var)],
+                                                                                                                  exp_data_this_id[,get(end_date_var)]))) {
+                                                      d.day <- lubridate::int_start(Zlast)
+                                                    }
+                                                    else {
+                                                      d.day <- exp_start_this_id[exp_start_this_id%within%Zlast][1]
+                                                    }
+                                                  }
+                                                }
+                                                d.day <- d.day - cov_acute
+                                                if(is.na(d.day)) d.day <- int_end(Zpenultimate)  ### If d day doesn't exist then we simply set the interval end to the end of Zpenultimate ### ATTENTION: Discovered that may have to set d.day to last day in Zpenultimate if there is no first day in exposure change in Zlast based on observing GS
+                                                Zpenultimate.to.d.day <- lubridate::interval(lubridate::int_start(Zpenultimate),d.day)
+                                                ### L(t) is set to the last measurement in 'Zpenultimate' strictly after the date when L(t-1) is measured; so, modifying Zpenultimate to begin with (L(t-1) date + 1) if L(t) exists, or either in 'Zlast' up to and including (cov_acute==FALSE), or not including, day 'd' in Zlast
+                                                if(!is.na(combined_data[intnum==t.int-1,get(cov_name)])) lubridate::int_start(Zpenultimate.to.d.day) <- combined_data[intnum==t.int-1,get(cov_date)] + 1
+                                                # ### ATTENTION: Found bug with logic for case 14 - I feel L(t) should be set to the last measurment in 'Zpenultimate' strictly after the date when L(t-1) is measured or strictly after date of the last non-missing measurment
+                                                if(any(combined_data[!is.na(get(cov_date)) & intnum<t.int,get(cov_date)]%within%Zpenultimate)){
+                                                  Zpenultimate.modified.start <- tail(combined_data[!is.na(get(cov_date)) & intnum<t.int,get(cov_date)][combined_data[!is.na(get(cov_date)) & intnum<t.int,get(cov_date)]%within%Zpenultimate],1) + 1
+                                                  lubridate::int_start(Zpenultimate.to.d.day) <- Zpenultimate.modified.start
+                                                }
+                                                if(any(cov_dates_this_id%within%Zpenultimate.to.d.day)){
+                                                  combined_data[intnum==t.int,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%Zpenultimate.to.d.day],1)]
+                                                  combined_data[intnum==t.int,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%Zpenultimate.to.d.day],1)]
+                                                }
+                                                else{
+                                                  combined_data[intnum==t.int,eval(cov_date):=NA]
+                                                  combined_data[intnum==t.int,eval(cov_name):=NA]
+                                                }
+                                                
+                                                ### L(t+1) assignment
+                                                interval.start <- dplyr::if_else(is.na(combined_data[intnum==t.int,get(cov_date)]), max(lubridate::as_date(lubridate::int_end(Zpenultimate.to.d.day))+1, combined_data[!is.na(get(cov_date)) & intnum<t.int,][.N,get(cov_date)+1]), combined_data[intnum==t.int,get(cov_date)]+1) ### interval.start is strictly after the date when L(t) is measured, if L(t) is present, or, else,(strictly after the first day the exposure changes(i.e. cov_acute==FALSE) or on or after the first day when the exposure changes(i.e. cov_acute==TRUE))
+                                                interval.end <- eof_date_this_id
+                                                interval.final <- lubridate::interval(interval.start,interval.end)
+                                                if(any(cov_dates_this_id%within%interval.final)){
+                                                  combined_data[intnum==t.int+1,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
+                                                  combined_data[intnum==t.int+1,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
+                                                }
+                                                else{
+                                                  combined_data[intnum==t.int+1,eval(cov_date):=NA]
+                                                  combined_data[intnum==t.int+1,eval(cov_name):=NA]
+                                                }
+                                              }
+                                            }
+                                            
+                                            ## subject-specific output
+                                            #combined_data[, "case_"%+%cov_name := as.numeric(case)]
+                                            combined_data[, case:= as.numeric(case)]
+                                            combined_data[, `:=`(exp_change = NULL, part1 = NULL)] #, case = NULL
+                                            
+                                            return(combined_data)
+                                          })  # END: loop over subjects
             ## merge ID-specific data sets
             data_assigned_lt_by_id <- data.table::rbindlist(data_assigned_lt_by_id, fill = TRUE)            
             if(cov_position==1){
-                data_assigned_lt <- copy(data_assigned_lt_by_id)
-                data.table::setcolorder(data_assigned_lt, c(id_var, "intnum", "intstart", "intend",
-                                                            "exposure", "outcome", "censor",
-                                                            "caseExp", eof_type_var, "case", cov_name, cov_date
-                                                            ))
-                data.table::setnames(data_assigned_lt, cov_date,
-                                     paste0("dt", cov_name))
+              data_assigned_lt <- copy(data_assigned_lt_by_id)
+              data.table::setcolorder(data_assigned_lt, c(id_var, "intnum", "intstart", "intend",
+                                                          "exposure", "outcome", "censor",
+                                                          "caseExp", eof_type_var, "case", cov_name, cov_date
+              ))
+              data.table::setnames(data_assigned_lt, cov_date,
+                                   paste0("dt", cov_name))
             }else{
-                data_assigned_lt_by_id <- data_assigned_lt_by_id[,c(id_var,"intnum",cov_name,cov_date),with=FALSE]
-                data.table::setnames(data_assigned_lt_by_id, cov_date,
-                                     paste0("dt", cov_name))
-                data_assigned_lt <- data.table::merge.data.table(data_assigned_lt,data_assigned_lt_by_id,by=c(id_var,"intnum"),all=TRUE)
+              data_assigned_lt_by_id <- data_assigned_lt_by_id[,c(id_var,"intnum",cov_name,cov_date),with=FALSE]
+              data.table::setnames(data_assigned_lt_by_id, cov_date,
+                                   paste0("dt", cov_name))
+              data_assigned_lt <- data.table::merge.data.table(data_assigned_lt,data_assigned_lt_by_id,by=c(id_var,"intnum"),all=TRUE)
             }
-        }  # END: loop over covariates
+          }  # END: loop over covariates
+        } else {
+          data_assigned_lt <- outcome_data
+        }
     
       ## For loop for time-indepent
       
@@ -2424,7 +2428,12 @@ LtAtData <- R6::R6Class(
     },
     imputeL = function() {
         ## identify all time-dep and time-indep covariates
-        covariate_data <- c(private$.cov_data,private$.cohort_data$L0_timeIndep)
+        if(any(!is.na(private$.cov_data))){ ### ATTENTION: If code produced extra warnings, try !is.na(private$.cov_data)[1]
+          covariate_data <- c(private$.cov_data,private$.cohort_data$L0_timeIndep)
+        } else{
+          covariate_data <- private$.cohort_data$L0_timeIndep
+        }
+        #covariate_data <- c(private$.cov_data,private$.cohort_data$L0_timeIndep)
 
         ## Only sporadic time-dep and time-indep variables first need baseline imputation and imputation indicators
         ## All time-indep variables need LOVCF except "indicator" variables
@@ -2463,6 +2472,7 @@ LtAtData <- R6::R6Class(
         invisible(self)
     },
     cleanUp = function(format, dates){
+
         ## Create object that will be used to reorder covariates in a standardized fashion
         timeIndep <- names(private$.cohort_data$L0_timeIndep)
         names(timeIndep) <- timeIndep
@@ -2480,11 +2490,16 @@ LtAtData <- R6::R6Class(
         timeDepOrdered <- timeDepOrdered[timeDepOrdered%in%names(private$.data)]
         orderedCol <- c(private$.cohort_data$IDvar,"intnum","intstart","intend",private$.cohort_data$EOF_type,"outcome","censor",timeIndepOrdered,timeDepOrdered,"exposure")
         if(all(c("tie","A0.warn")%in%names(private$.data)))orderedCol <- c(orderedCol,"tie","A0.warn")
-
-        assert_that( all(sort(names(private$.data)[ !names(private$.data)%in%orderedCol ])==c("case","caseExp")) , msg = "some columns might need exporting")
+        
+        if(any(!is.na(private$.cov_data))){ ### ATTENTION: If code produced extra warnings, try !is.na(private$.cov_data)[1]
+          assert_that( all(sort(names(private$.data)[ !names(private$.data)%in%orderedCol ])==c("case","caseExp")) , msg = "some columns might need exporting")
+        } else{
+          assert_that( all(sort(names(private$.data)[ !names(private$.data)%in%orderedCol ])==c("case")) , msg = "some columns might need exporting")
+        }
+        #assert_that( all(sort(names(private$.data)[ !names(private$.data)%in%orderedCol ])==c("case","caseExp")) , msg = "some columns might need exporting")
         
         ## Remove unneeded columns
-        private$.data <- private$.data[ , -c("caseExp","case"), with=FALSE]
+        private$.data <- suppressWarnings(private$.data[ , -c("caseExp","case"), with=FALSE])
         if(!dates){
             col2remove <- unlist(lapply(private$.data,class))=="Date"
             col2remove <- names(col2remove)[col2remove]

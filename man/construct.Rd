@@ -15,8 +15,9 @@ construct(
 }
 \arguments{
 \item{LtAtspec}{specifies an object of class \code{LtAtData} created by
-assembling cohort, exposure, and time-dependent covariate
-data objects. Cannot be missing.}
+assembling cohort (required), exposure (required), and
+time-dependent covariate (optional) data objects.
+Cannot be missing.}
 
 \item{time_unit}{specifies the unit of time (expressed in days) for
 discretizing follow-time into consecutive time intervals
