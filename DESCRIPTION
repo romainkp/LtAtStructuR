@@ -1,6 +1,6 @@
 Package: LtAtStructuR
 Title: Structuring of Complex Longitudinal Data into Long Format
-Version: 0.0.3
+Version: 1.0
 Authors@R: c(
     person(given = "Romain", family = "Neugebauer",
            email = "romain.s.neugebauer@kp.org",
@@ -27,7 +27,12 @@ Imports:
     dplyr,
     lubridate,
     assertthat,
-    future.apply
+    future.apply,
+    shiny,
+    shinyjs,
+    DT,
+    simsalapar,
+    future
 Suggests:
     testthat,
     knitr,
