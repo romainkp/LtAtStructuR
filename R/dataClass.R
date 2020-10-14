@@ -802,7 +802,7 @@ timeDepCovData <- R6::R6Class(
 #'
 #' @importFrom R6 R6Class
 #' @importFrom pryr unenclose
-#' @importFrom data.table is.data.table copy setkeyv shift rbindlist setcolorder setorderv data.table merge.data.table
+#' @importFrom data.table is.data.table copy setkeyv shift rbindlist setcolorder setorderv data.table
 #' @importFrom lubridate is.Date %within% interval as_date int_start int_end ymd interval int_overlaps intersect
 #' @importFrom assertthat assert_that is.string noNA is.flag
 #' @importFrom future.apply future_lapply
@@ -2404,7 +2404,7 @@ LtAtData <- R6::R6Class(
               data_assigned_lt_by_id <- data_assigned_lt_by_id[,c(id_var,"intnum",cov_name,cov_date),with=FALSE]
               data.table::setnames(data_assigned_lt_by_id, cov_date,
                                    paste0("dt", cov_name))
-              data_assigned_lt <- data.table::merge.data.table(data_assigned_lt,data_assigned_lt_by_id,by=c(id_var,"intnum"),all=TRUE)
+              data_assigned_lt <- merge(data_assigned_lt,data_assigned_lt_by_id,by=c(id_var,"intnum"),all=TRUE)
             }
           }  # END: loop over covariates
         } else {
