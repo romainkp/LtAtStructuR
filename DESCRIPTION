@@ -1,6 +1,6 @@
 Package: LtAtStructuR
 Title: Structuring of Complex Longitudinal Data into Long Format
-Version: 1.0.1
+Version: 1.0.2
 Authors@R: c(
     person(given = "Romain", family = "Neugebauer",
            email = "romain.s.neugebauer@kp.org",

@@ -27,7 +27,7 @@ border-color: #aaa !important;
 shinyUI(fluidPage(
   
 shinyjs::useShinyjs(),
-shinyjs::extendShinyjs(text = jscode),
+shinyjs::extendShinyjs(text = jscode, functions = c("disableTab","enableTab")),
 shinyjs::inlineCSS(css),
 navbarPage("LtAtStructuR",id="navbarPage",
            tabPanel("Cohort", id = "Cohort",
