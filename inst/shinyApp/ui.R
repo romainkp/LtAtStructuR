@@ -33,7 +33,7 @@ navbarPage("LtAtStructuR",id="navbarPage",
            tabPanel("Cohort", id = "Cohort",
                     sidebarLayout(
                       sidebarPanel(
-                        fileInput("cohort.file", "Choose CSV File",
+                        fileInput("cohort.file", "Choose CSV/SAS File",
                                   multiple = FALSE,
                                   accept = c("text/csv",
                                              "text/comma-separated-values,text/plain",
@@ -68,7 +68,7 @@ navbarPage("LtAtStructuR",id="navbarPage",
            tabPanel("Exposure", id = "Exposure",
                     sidebarLayout(
                       sidebarPanel(
-                        fileInput("exposure.file", "Choose CSV File",
+                        fileInput("exposure.file", "Choose CSV/SAS File",
                                   multiple = FALSE,
                                   accept = c("text/csv",
                                              "text/comma-separated-values,text/plain",
@@ -103,7 +103,7 @@ navbarPage("LtAtStructuR",id="navbarPage",
                         #textOutput("covariate.uploaded"),
                         # Horizontal line ----
                         tags$hr(),
-                        fileInput("covariate.file", "Choose CSV File",
+                        fileInput("covariate.file", "Choose CSV/SAS File",
                                   multiple = FALSE,
                                   accept = c("text/csv",
                                              "text/comma-separated-values,text/plain",

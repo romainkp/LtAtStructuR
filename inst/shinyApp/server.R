@@ -1,6 +1,7 @@
 
 shinyServer(function(input, output, session) {
-  # test
+  # Set maxiumum upload file size to 500MB
+  options(shiny.maxRequestSize=500*1024^2)
   # disable tabs Exposure, Covariate, and Construct on page load
   shinyjs::js$disableTab("Exposure")
   shinyjs::js$disableTab("Covariates")
@@ -34,8 +35,8 @@ shinyServer(function(input, output, session) {
     inFile.cohort <- input$cohort.file
     if (is.null(inFile.cohort))
       return(NULL)
-    df <- data.table::fread(inFile.cohort$datapath, 
-                   sep = ',')
+    if(stringr::str_detect(inFile.cohort$datapath, ".sas7bdat")) df <- data.table::setDT(haven::read_sas(inFile.cohort$datapath))
+    else df <- data.table::fread(inFile.cohort$datapath,sep = ',')
     return(df)
   })
   
@@ -45,6 +46,8 @@ shinyServer(function(input, output, session) {
   rv <- reactiveValues(cohort.eof.date = NULL)
   rv <- reactiveValues(cohort.eof.type = NULL)
   rv <- reactiveValues(cohort.no.time.indep = NULL)
+  rv <- reactiveValues(cohort.index.sas.date = NULL)
+  rv <- reactiveValues(cohort.eof.sas.date = NULL)
 
   observeEvent(input$cohort.file, rv$cohort.data <- cohort.data())
   
@@ -164,8 +167,16 @@ shinyServer(function(input, output, session) {
   
   cohort.data.final <- eventReactive(input$set.cohort.button,{
     rv$cohort.data[,input$cohort.IDvar] <- as.character(rv$cohort.id)
-    rv$cohort.data[,input$cohort.index.date] <- lubridate::as_date(lubridate::parse_date_time(rv$cohort.index.date, c("Ymd","Ydm","mdY","mYd","dmY","dYm"))) #as.Date(rv$cohort.index.date)
-    rv$cohort.data[,input$cohort.EOF.date] <- lubridate::as_date(lubridate::parse_date_time(rv$cohort.eof.date, c("Ymd","Ydm","mdY","mYd","dmY","dYm"))) #as.Date(rv$cohort.eof.date)
+    rv$cohort.index.sas.date <- is.numeric(rv$cohort.data[,get(input$cohort.index.date)])
+    rv$cohort.eof.sas.date <- is.numeric(rv$cohort.data[,get(input$cohort.EOF.date)])
+    SAS.file <- isTRUE(stringr::str_detect(input$cohort.file$datapath, ".sas7bdat"))
+    if(SAS.file){
+      if(rv$cohort.index.sas.date) rv$cohort.data[,input$cohort.index.date] <- lubridate::as_date(rv$cohort.index.date, origin="1960-01-01") else rv$cohort.data[,input$cohort.index.date] <- lubridate::as_date(lubridate::parse_date_time(rv$cohort.index.date, c("Ymd","Ydm","mdY","mYd","dmY","dYm")))
+      if(rv$cohort.eof.sas.date) rv$cohort.data[,input$cohort.EOF.date] <- lubridate::as_date(rv$cohort.eof.date, origin="1960-01-01") else rv$cohort.data[,input$cohort.EOF.date] <- lubridate::as_date(lubridate::parse_date_time(rv$cohort.eof.date, c("Ymd","Ydm","mdY","mYd","dmY","dYm")))
+    } else{
+      rv$cohort.data[,input$cohort.index.date] <- lubridate::as_date(lubridate::parse_date_time(rv$cohort.index.date, c("Ymd","Ydm","mdY","mYd","dmY","dYm"))) 
+      rv$cohort.data[,input$cohort.EOF.date] <- lubridate::as_date(lubridate::parse_date_time(rv$cohort.eof.date, c("Ymd","Ydm","mdY","mYd","dmY","dYm"))) 
+    }
     rv$cohort.data[,input$cohort.EOF.type] <- as.character(rv$cohort.eof.type)
     col.to.num <- names(rv$cohort.data)[sapply(rv$cohort.data,class)%in%"integer"]
     if(length(col.to.num)>0) rv$cohort.data[,eval(col.to.num) := as.numeric(get(col.to.num))]
@@ -194,14 +205,26 @@ shinyServer(function(input, output, session) {
   })
   
   cohort.code <- eventReactive(input$set.cohort.button,{
+    SAS.file <- isTRUE(stringr::str_detect(input$cohort.file$datapath, ".sas7bdat"))
+    pdt.index.date.method <- paste0("cohortDT[,",input$cohort.index.date,":=as_date(parse_date_time(",input$cohort.index.date,", c('Ymd','Ydm','mdY','mYd','dmY','dYm')))]"," \n")
+    pdt.eof.date.method <- paste0("cohortDT[,",input$cohort.EOF.date,":=as_date(parse_date_time(",input$cohort.EOF.date,", c('Ymd','Ydm','mdY','mYd','dmY','dYm')))]"," \n")
+    sas.index.date.method <- paste0("cohortDT[,",input$cohort.index.date,":=as_date(",input$cohort.index.date,", origin='1960-01-01')]"," \n")
+    sas.eof.date.method <- paste0("cohortDT[,",input$cohort.EOF.date,":=as_date(",input$cohort.EOF.date,", origin='1960-01-01')]"," \n")
+    if(SAS.file){
+      if(rv$cohort.index.sas.date) index.date.code <- sas.index.date.method else index.date.code <- pdt.index.date.method
+      if(rv$cohort.eof.sas.date) EOF.date.code <- sas.eof.date.method else EOF.date.code <- pdt.eof.date.method
+    } else{
+      index.date.code <- pdt.index.date.method
+      EOF.date.code <- pdt.eof.date.method
+    }
     `%+%` <- function(a, b) paste0(a, b)
     paste0("library(lubridate)"," \n",
            "library(data.table)"," \n",
            "library(LtAtStructuR)"," \n\n",
            "cohortDT <- fread(file='",input$cohort.file$name,"')"," \n",
            "cohortDT[,",input$cohort.IDvar,":=as.character(",input$cohort.IDvar,")]"," \n",
-           "cohortDT[,",input$cohort.index.date,":=as_date(parse_date_time(",input$cohort.index.date,", c('Ymd','Ydm','mdY','mYd','dmY','dYm')))]"," \n",
-           "cohortDT[,",input$cohort.EOF.date,":=as_date(parse_date_time(",input$cohort.EOF.date,", c('Ymd','Ydm','mdY','mYd','dmY','dYm')))]"," \n",
+           index.date.code,
+           EOF.date.code,
            "cohortDT[,",input$cohort.EOF.type,":=as.character(",input$cohort.EOF.type,")]"," \n",
            "col.to.num <- names(cohortDT)[sapply(cohortDT,class)%in%'integer']"," \n",
            "cohortDT[,eval(col.to.num) := as.numeric(get(col.to.num))]"," \n",
@@ -281,8 +304,8 @@ shinyServer(function(input, output, session) {
     inFile.exposure <- input$exposure.file
     if (is.null(inFile.exposure))
       return(NULL)
-    df <- data.table::fread(inFile.exposure$datapath,
-                   sep = ',')
+    if(stringr::str_detect(inFile.exposure$datapath, ".sas7bdat")) df <- data.table::setDT(haven::read_sas(inFile.exposure$datapath))
+    else df <- data.table::fread(inFile.exposure$datapath,sep = ',')
     return(df)
   })
   
@@ -290,6 +313,8 @@ shinyServer(function(input, output, session) {
   rv <- reactiveValues(exposure.id = NULL)
   rv <- reactiveValues(exposure.start.date = NULL)
   rv <- reactiveValues(exposure.end.date = NULL)
+  rv <- reactiveValues(exposure.start.sas.date = NULL)
+  rv <- reactiveValues(exposure.end.sas.date = NULL)
 
   observeEvent(input$exposure.file, rv$exposure.data <- exposure.data())
   
@@ -338,9 +363,18 @@ shinyServer(function(input, output, session) {
   })
   
   exposure.data.final <- eventReactive(input$set.exposure.button,{
+    #browser()
     rv$exposure.data[,input$exposure.IDvar] <- as.character(rv$exposure.id)
-    rv$exposure.data[,input$exposure.start.date] <- lubridate::as_date(lubridate::parse_date_time(rv$exposure.index.date, c("Ymd","Ydm","mdY","mYd","dmY","dYm"))) #as.Date(rv$exposure.index.date)
-    rv$exposure.data[,input$exposure.end.date] <- lubridate::as_date(lubridate::parse_date_time(rv$exposure.eof.date, c("Ymd","Ydm","mdY","mYd","dmY","dYm"))) #as.Date(rv$exposure.eof.date)
+    SAS.file <- isTRUE(stringr::str_detect(input$exposure.file$datapath, ".sas7bdat"))
+    rv$exposure.start.sas.date <- is.numeric(rv$exposure.data[,get(input$exposure.start.date)])
+    rv$exposure.end.sas.date <- is.numeric(rv$exposure.data[,get(input$exposure.end.date)])
+    if(SAS.file){
+      if(rv$exposure.start.sas.date) rv$exposure.data[,input$exposure.start.date] <- lubridate::as_date(rv$exposure.index.date, origin="1960-01-01") else rv$exposure.data[,input$exposure.start.date] <- lubridate::as_date(lubridate::parse_date_time(rv$exposure.index.date, c("Ymd","Ydm","mdY","mYd","dmY","dYm")))
+      if(rv$exposure.end.sas.date) rv$exposure.data[,input$exposure.end.date] <- lubridate::as_date(rv$exposure.eof.date, origin="1960-01-01") else rv$exposure.data[,input$exposure.end.date] <- lubridate::as_date(lubridate::parse_date_time(rv$exposure.eof.date, c("Ymd","Ydm","mdY","mYd","dmY","dYm")))
+    } else{
+      rv$exposure.data[,input$exposure.start.date] <- lubridate::as_date(lubridate::parse_date_time(rv$exposure.index.date, c("Ymd","Ydm","mdY","mYd","dmY","dYm")))
+      rv$exposure.data[,input$exposure.end.date] <- lubridate::as_date(lubridate::parse_date_time(rv$exposure.eof.date, c("Ymd","Ydm","mdY","mYd","dmY","dYm")))
+    }
     return(rv$exposure.data)
   })
   
@@ -365,12 +399,33 @@ shinyServer(function(input, output, session) {
     return(x$value)
   })
   
+  # exposure.code <- eventReactive(input$set.exposure.button,{
+  #   `%+%` <- function(a, b) paste0(a, b)
+  #   paste0("exposureDT <- fread(file='",input$exposure.file$name,"')"," \n",
+  #          "exposureDT[,",input$exposure.IDvar,":=as.character(",input$exposure.IDvar,")]","\n",
+  #          "exposureDT[,",input$exposure.start.date,":=as_date(parse_date_time(",input$exposure.start.date,", c('Ymd','Ydm','mdY','mYd','dmY','dYm')))]","\n",
+  #          "exposureDT[,",input$exposure.end.date,":=as_date(parse_date_time(",input$exposure.end.date,", c('Ymd','Ydm','mdY','mYd','dmY','dYm')))]","\n",
+  #          "exposure <- setExposure(data = exposureDT, IDvar = '",input$exposure.IDvar,"', start_date = '",input$exposure.start.date,"', end_date = '",input$exposure.end.date,"', exp_level = ",ifelse(input$exposure.exp.level=="",NA,"'"%+%input$exposure.exp.level%+%"'"),", exp_ref = ",ifelse(input$exposure.exp.ref=="",NA,"'"%+%input$exposure.exp.ref%+%"'"),")")
+  # })
+  
   exposure.code <- eventReactive(input$set.exposure.button,{
+    SAS.file <- isTRUE(stringr::str_detect(input$cohort.file$datapath, ".sas7bdat"))
+    pdt.start.date.method <- paste0("exposureDT[,",input$exposure.start.date,":=as_date(parse_date_time(",input$exposure.start.date,", c('Ymd','Ydm','mdY','mYd','dmY','dYm')))]","\n")
+    pdt.end.date.method <- paste0("exposureDT[,",input$exposure.end.date,":=as_date(parse_date_time(",input$exposure.end.date,", c('Ymd','Ydm','mdY','mYd','dmY','dYm')))]","\n")
+    sas.start.date.method <- paste0("exposureDT[,",input$exposure.start.date,":=as_date(",input$exposure.start.date,", origin='1960-01-01')]","\n")
+    sas.end.date.method <- paste0("exposureDT[,",input$exposure.end.date,":=as_date(",input$exposure.end.date,", origin='1960-01-01')]","\n")
+    if(SAS.file){
+      if(rv$exposure.start.sas.date) start.date.code <- sas.start.date.method else start.date.code <- pdt.start.date.method
+      if(rv$exposure.end.sas.date) end.date.code <- sas.end.date.method else end.date.code <- pdt.end.date.method
+    } else{
+      start.date.code <- pdt.start.date.method
+      end.date.code <- pdt.end.date.method
+    }
     `%+%` <- function(a, b) paste0(a, b)
     paste0("exposureDT <- fread(file='",input$exposure.file$name,"')"," \n",
            "exposureDT[,",input$exposure.IDvar,":=as.character(",input$exposure.IDvar,")]","\n",
-           "exposureDT[,",input$exposure.start.date,":=as_date(parse_date_time(",input$exposure.start.date,", c('Ymd','Ydm','mdY','mYd','dmY','dYm')))]","\n",
-           "exposureDT[,",input$exposure.end.date,":=as_date(parse_date_time(",input$exposure.end.date,", c('Ymd','Ydm','mdY','mYd','dmY','dYm')))]","\n",
+           start.date.code,
+           end.date.code,
            "exposure <- setExposure(data = exposureDT, IDvar = '",input$exposure.IDvar,"', start_date = '",input$exposure.start.date,"', end_date = '",input$exposure.end.date,"', exp_level = ",ifelse(input$exposure.exp.level=="",NA,"'"%+%input$exposure.exp.level%+%"'"),", exp_ref = ",ifelse(input$exposure.exp.ref=="",NA,"'"%+%input$exposure.exp.ref%+%"'"),")")
   })
   
@@ -434,8 +489,8 @@ shinyServer(function(input, output, session) {
     inFile.covariate <- input$covariate.file
     if (is.null(inFile.covariate))
       return(NULL)
-    df <- data.table::fread(inFile.covariate$datapath,
-                   sep = ',')
+    if(stringr::str_detect(inFile.covariate$datapath, ".sas7bdat")) df <- data.table::setDT(haven::read_sas(inFile.covariate$datapath))
+    else df <- data.table::fread(inFile.covariate$datapath,sep = ',')
     return(df)
   })
   
@@ -446,6 +501,7 @@ shinyServer(function(input, output, session) {
   rv <- reactiveValues(set.covariate.list = NULL)
   rv <- reactiveValues(set.covariate.list.names = NULL)
   rv <- reactiveValues(covariate.R.code = NULL)
+  rv <- reactiveValues(covariate.l.sas.date = NULL)
 
   observeEvent(input$covariate.file, rv$covariate.data <- covariate.data())
   
@@ -501,7 +557,14 @@ shinyServer(function(input, output, session) {
   
   covariate.data.final <- eventReactive(input$set.covariate.button,{
     rv$covariate.data[,input$covariate.IDvar] <- as.character(rv$covariate.id)
-    rv$covariate.data[,input$covariate.L.date] <- lubridate::as_date(lubridate::parse_date_time(rv$covariate.l.date, c("Ymd","Ydm","mdY","mYd","dmY","dYm"))) #as.Date(rv$covariate.l.date)
+    SAS.file <- isTRUE(stringr::str_detect(input$covariate.file$datapath, ".sas7bdat"))
+    rv$covariate.l.sas.date <- is.numeric(rv$covariate.data[,get(input$covariate.L.date)])
+    if(SAS.file){
+      if(rv$covariate.l.sas.date) rv$covariate.data[,input$covariate.L.date] <- lubridate::as_date(lubridate::as_date(rv$covariate.l.date, origin="1960-01-01")) else rv$covariate.data[,input$covariate.L.date] <- lubridate::as_date(lubridate::parse_date_time(rv$covariate.l.date, c("Ymd","Ydm","mdY","mYd","dmY","dYm")))
+    }
+    else{
+      rv$covariate.data[,input$covariate.L.date] <- lubridate::as_date(lubridate::parse_date_time(rv$covariate.l.date, c("Ymd","Ydm","mdY","mYd","dmY","dYm")))
+    }
     return(rv$covariate.data)
   })
 
@@ -552,12 +615,29 @@ shinyServer(function(input, output, session) {
     paste0("covariateDT",number," <- fread(file='",input$covariate.file$name,"')"," \n","covariate",number," <- setCovariate(data = covariateDT",number,", type = '",input$covariate.type,"', IDvar = '",input$covariate.IDvar,"', L_date = '",input$covariate.L.date,"', L_name = '",input$covariate.L.name,"', categorical = ",as.logical(input$covariate.L.categorical),", impute = ",ifelse(input$covariate.L.impute=="",NA,"'"%+%input$covariate.L.impute%+%"'"),", impute_default_level = ",ifelse(input$covariate.L.impute.default.level=="",NA,"'"%+%input$covariate.L.impute.default.level%+%"'"),", acute_change = ",input$covariate.L.acute.change,")")
   })
 
+  # observeEvent(input$set.covariate.button,{
+  #   `%+%` <- function(a, b) paste0(a, b)
+  #   number <- which(unique(rv$set.covariate.list.names)==input$covariate.file$name)
+  #   rv$covariate.R.code[number] <- paste0("covariateDT",number," <- fread(file='",input$covariate.file$name,"')"," \n",
+  #                                         "covariateDT",number,"[,",input$covariate.IDvar,":=as.character(",input$covariate.IDvar,")]"," \n",
+  #                                         "covariateDT",number,"[,",input$covariate.L.date,":=as_date(parse_date_time(",input$covariate.L.date,", c('Ymd','Ydm','mdY','mYd','dmY','dYm')))]"," \n",
+  #                                         "covariate",number," <- setCovariate(data = covariateDT",number,", type = '",input$covariate.type,"', IDvar = '",input$covariate.IDvar,"', L_date = '",input$covariate.L.date,"', L_name = '",input$covariate.L.name,"', categorical = ",as.logical(input$covariate.L.categorical),", impute = ",ifelse(input$covariate.L.impute=="",NA,"'"%+%input$covariate.L.impute%+%"'"),", impute_default_level = ",ifelse(input$covariate.L.impute.default.level=="",NA,"'"%+%input$covariate.L.impute.default.level%+%"'"),", acute_change = ",input$covariate.L.acute.change,")")
+  # })
+  
   observeEvent(input$set.covariate.button,{
-    `%+%` <- function(a, b) paste0(a, b)
+    SAS.file <- isTRUE(stringr::str_detect(input$covariate.file$datapath, ".sas7bdat"))
     number <- which(unique(rv$set.covariate.list.names)==input$covariate.file$name)
+    pdt.cov.date.method <- paste0("covariateDT",number,"[,",input$covariate.L.date,":=as_date(parse_date_time(",input$covariate.L.date,", c('Ymd','Ydm','mdY','mYd','dmY','dYm')))]"," \n")
+    sas.cov.date.method <- paste0("covariateDT",number,"[,",input$covariate.L.date,":=as_date(",input$covariate.L.date,", origin='1960-01-01')]"," \n")
+    if(SAS.file){
+      if(rv$covariate.l.sas.date) cov.date.code <- sas.cov.date.method else cove.date.code <- pdt.cov.date.method
+    } else{
+      cov.date.code <- pdt.cov.date.method
+    }
+    `%+%` <- function(a, b) paste0(a, b)
     rv$covariate.R.code[number] <- paste0("covariateDT",number," <- fread(file='",input$covariate.file$name,"')"," \n",
                                           "covariateDT",number,"[,",input$covariate.IDvar,":=as.character(",input$covariate.IDvar,")]"," \n",
-                                          "covariateDT",number,"[,",input$covariate.L.date,":=as_date(parse_date_time(",input$covariate.L.date,", c('Ymd','Ydm','mdY','mYd','dmY','dYm')))]"," \n",
+                                          cov.date.code,
                                           "covariate",number," <- setCovariate(data = covariateDT",number,", type = '",input$covariate.type,"', IDvar = '",input$covariate.IDvar,"', L_date = '",input$covariate.L.date,"', L_name = '",input$covariate.L.name,"', categorical = ",as.logical(input$covariate.L.categorical),", impute = ",ifelse(input$covariate.L.impute=="",NA,"'"%+%input$covariate.L.impute%+%"'"),", impute_default_level = ",ifelse(input$covariate.L.impute.default.level=="",NA,"'"%+%input$covariate.L.impute.default.level%+%"'"),", acute_change = ",input$covariate.L.acute.change,")")
   })
   
