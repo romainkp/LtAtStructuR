@@ -750,6 +750,13 @@ timeDepCovData <- R6::R6Class(
         assert_that(private$.L_name %in% otherData$L0, msg = "The time-dependent covariate " %+% private$.L_name %+% " must have its baseline measurement stored in the cohort dataset.")
         assert_that(!private$.L_name %in% names(otherData$L0_timeIndep), msg = "The time-dependent covariate " %+% private$.L_name %+% " was specified as a time-independent covariate in the cohort dataset.")
         assert_that( class(private$.data[,get(private$.L_name)]) == class(otherData$data[,get(private$.L_name)]) , msg = "The type (numeric or character) of the time-dependent covariate " %+% private$.L_name %+% " does not match the type for its baseline values stored in the cohort dataset")
+
+        if(private$.type=="interval") assertthat::assert_that(otherData$data[is.na(get(private$.L_name)),.N]==0, msg = "Covariate "%+%private$.L_name%+% " of type 'interval' is not allowed to have missing baseline values stored in the cohort dataset.")
+        if(private$.type=="binary monotone increasing") assertthat::assert_that(otherData$data[is.na(get(private$.L_name)),.N]==0, msg = "Covariate "%+%private$.L_name%+% " of type 'binary monotone increasing' is not allowed to have missing baseline values stored in the cohort dataset.")
+        if(private$.type=="indicator") assertthat::assert_that(otherData$data[is.na(get(private$.L_name)),.N]==0, msg = "Covariate "%+%private$.L_name%+% " of type 'indicator' is not allowed to have missing baseline values stored in the cohort dataset.")
+
+        if(private$.type=="binary monotone increasing") assert_that(otherData$data[, all(unique(get(private$.L_name))%in%c(0,1))], msg = "Baseline values for the covariate "%+%private$.L_name%+%" of type 'binary monotone increasing' that are stored in the cohort dataset must be either 1 or 0 (no other values are allowed).")
+        
         assert_that(private$.IDvar == otherData$IDvar, msg = "The cohort dataset and the time-dependent covariate dataset for " %+% private$.L_name %+% " must use the same column name to store unique subject identifiers.")
         assert_that(all(private$.data[!get(private$.IDvar)%in%otherData$IDs_ignore, get(private$.IDvar)] %in% otherData$data[, get(otherData$IDvar)]), msg = "Subject identifiers in the time-dependent covariate dataset for " %+% private$.L_name %+% " must also be found in the cohort dataset.")
 

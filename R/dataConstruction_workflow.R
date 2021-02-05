@@ -11,8 +11,10 @@
       stop("Cannot add an object of class LtAtData with an object that is not of class cohortData, expData, or timeDepCovData.")
     }
   } else {
-    if (any(c("cohortData", "expData", "timeDepCovData") %in% class(spec1)) & any(c("cohortData", "expData", "timeDepCovData") %in% class(spec2))) {
-      return(LtAtData$new()$addSpec(spec1)$addSpec(spec2))
+      if (any(c("cohortData", "expData", "timeDepCovData") %in% class(spec1)) & any(c("cohortData", "expData", "timeDepCovData") %in% class(spec2))) {
+          res <- LtAtData$new()
+          attributes(res)$class <- c(attributes(res)$class, "LtAtObject") # required so '+.LtAtObject' can operate on it later on with another object that might not be of class LtAtObject
+          return(res$addSpec(spec1)$addSpec(spec2))
     } else {
       stop("Cannot add an object of class cohortData, expData, or timeDepCovData with an object of another class.")
     }
