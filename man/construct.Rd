@@ -4,14 +4,7 @@
 \alias{construct}
 \title{Main function of the package}
 \usage{
-construct(
-  LtAtspec,
-  time_unit,
-  first_exp_rule = 1,
-  exp_threshold = 0.5,
-  format = "standard",
-  dates = FALSE
-)
+construct(LtAtspec, time_unit, ...)
 }
 \arguments{
 \item{LtAtspec}{specifies an object of class \code{LtAtData} created by
@@ -24,21 +17,66 @@ discretizing follow-time into consecutive time intervals
 of the same length. Must specify a strictly positive
 integer value. Cannot be missing.}
 
-\item{first_exp_rule}{specifies a binary value that indicates which of
-two algorithms is used to assign
-the first change in exposure status during follow-up.
-Default value is 1.}
-
-\item{exp_threshold}{specifies a threshold used to assign an exposure level
-at each time interval. Must be a value
-between 0 and 1. Default value is 0.5.}
-
 \item{format}{specifies the format of the output data set. Current possible
 values are "standard", or "MSM SAS macro". Default value is
 "standard".}
 
 \item{dates}{indicates whether the output dataset should contain dates.
 Default value is FALSE.}
+
+\item{first_exp_rule}{specifies a binary value that indicates which of
+two algorithms is used when the exposure is defined using
+\code{setExposure}
+to assign
+the first change in exposure status during follow-up.
+Default value is 1. Can be missing (or will be ignored)
+if the exposure is defined using
+\code{setInstantExposure}.}
+
+\item{exp_threshold}{specifies a threshold used to assign an exposure level
+at each time interval when the exposure is defined using
+\code{setExposure}. Must be a value
+between 0 and 1. Default value is 0.5.
+Can be missing (or will be ignored)
+if the exposure is defined using
+\code{setInstantExposure}.}
+
+\item{max_exp_var}{sets the limit for the maximum number of exposure
+variables that is expected to be created by the routine
+to encode the exposure levels when the exposure is defined using
+\code{setInstantExposure}.
+An error will be
+produced
+if the input exposure dataset requires the creation of a larger
+than expected number of
+exposure variables.
+Default value is 100. Must be an integer.
+Can be missing (or will be ignored)
+if the exposure is defined using
+\code{setExposure}.}
+
+\item{max_cov_var}{sets the limit for the maximum number of
+variables that is expected to be created by the routine
+to encode the levels of each time-dependent covariate
+when the exposure is defined using \code{setInstantExposure}.
+An error will be
+produced
+if an input time-dependent covariate dataset requires the
+creation of a larger
+than expected number of
+covariate variables.
+Default value is 100. Must be an integer.
+Can be missing (or will be ignored)
+if the exposure is defined using
+\code{setExposure}.}
+
+\item{summary_cov_var}{indicates the coarsening method applied in each interval
+to summarize multiple measurements of a
+time-dependent covariate into a single summary measure.
+Current possible values are "last" or "all". "last" will result
+in retaining only the last observed measurement of the covariate in
+each interval. "all" will result in retaining all observed measurements.
+Default value is "last".}
 }
 \value{
 \code{data.table} object

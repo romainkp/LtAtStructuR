@@ -3,18 +3,27 @@
   if (any(c(class(spec1), class(spec2)) %in% "LtAtData")) {
     if (("LtAtData" %in% class(spec1) & any(c("cohortData", "expData", "timeDepCovData") %in% class(spec2))) | ("LtAtData" %in% class(spec2) & any(c("cohortData", "expData", "timeDepCovData") %in% class(spec1)))) {
       if ("LtAtData" %in% class(spec1)) {
-        return(spec1$addSpec(spec2))
+          if("instExpData"%in%class(spec2) & !"LtAtDataInst"%in%class(spec1))spec1 <- LtAtDataInst$new()$copyLtAtData(spec1)
+          return(spec1$addSpec(spec2))
       } else {
-        return(spec2$addSpec(spec1))
+          if("instExpData"%in%class(spec1) & !"LtAtDataInst"%in%class(spec2))spec2 <- LtAtDataInst$new()$copyLtAtData(spec2)
+          return(spec2$addSpec(spec1))
       }
     } else {
       stop("Cannot add an object of class LtAtData with an object that is not of class cohortData, expData, or timeDepCovData.")
     }
   } else {
-      if (any(c("cohortData", "expData", "timeDepCovData") %in% class(spec1)) & any(c("cohortData", "expData", "timeDepCovData") %in% class(spec2))) {
-          res <- LtAtData$new()
-          attributes(res)$class <- c(attributes(res)$class, "LtAtObject") # required so '+.LtAtObject' can operate on it later on with another object that might not be of class LtAtObject
-          return(res$addSpec(spec1)$addSpec(spec2))
+    if (any(c("cohortData", "expData", "timeDepCovData") %in% class(spec1)) & any(c("cohortData", "expData", "timeDepCovData") %in% class(spec2))) {
+        if("instExpData"%in%c(class(spec1),class(spec2))){
+            res <- LtAtDataInst$new()
+            attributes(res)$class <- c(attributes(res)$class, "LtAtObject") # required so '+.LtAtObject' can operate on it later on with another object that might not be of class LtAtObject
+            return(res$addSpec(spec1)$addSpec(spec2))
+        }
+        else{
+            res <- LtAtData$new()
+            attributes(res)$class <- c(attributes(res)$class, "LtAtObject") # required so '+.LtAtObject' can operate on it later on with another object that might not be of class LtAtObject
+            return(res$addSpec(spec1)$addSpec(spec2))
+        }
     } else {
       stop("Cannot add an object of class cohortData, expData, or timeDepCovData with an object of another class.")
     }
@@ -167,6 +176,53 @@ setExposure <- function(data, IDvar, start_date, end_date, exp_level = NA,
   return(outData)
 }
 
+#' Definition of instant exposure dataset
+#'
+#' The instant exposure dataset specifies all follow-up dates when a
+#' study subject is exposed to a non-reference exposure level.
+#' For each instanteneous exposures, the table specifies:
+#' 1) a unique subject identifier,
+#' 2) the exposure date,
+#' 3) the exposure level (required only when the exposure is not
+#'    binary).
+#'
+#' @export
+#'
+#' @keywords data
+#'
+#' @return \code{instExpData} object
+#'
+#' @param data \code{data.table} containing the input exposure dataset to be
+#'             wrapped in and processed. The table can contain multiple rows per
+#'             subject. There should be no row for subjects who are only
+#'             exposed to the reference exposure level during follow-up.
+#'             Exposure levels must be encoded by one or more character, 
+#'             integer, or numeric vector(s). Multiple rows per subject and date
+#'             are permitted. Cannot contain missing values. Cannot have columns
+#'             named 'IDvar', 'start_date', or 'exp_level'.
+#'
+#' @param IDvar \code{character} providing the name of the column of
+#'           \code{data} that contains the unique subject identifier.
+#'
+#' @param exp_date \code{character} providing the name of the column of
+#'            \code{data} that contains the exposure date.
+#'
+#' @param exp_level \code{character} vector providing the name(s) of the column(s) of
+#'            \code{data} that encode(s) the non-reference exposure level(s).
+#'            Can be missing if there is only one non-reference exposure level. If missing,
+#'            the exposure is assumed to be binary and its reference level is
+#'            encoded by 0.
+#'
+#' @seealso [instantExpData]
+#'
+#' @examples
+#' exposure <- setInstantExposure(expDT6, "ID", "fillDate", c("D.t","Q.t"))
+setInstantExposure <- function(data, IDvar, exp_date, exp_level = NA) {
+  outData <- instExpData$new(data, IDvar, exp_date, exp_level)
+  attributes(outData)$class <- c(attributes(outData)$class, "LtAtObject")
+  return(outData)
+}
+
 #' Definition of a time-dependent covariate dataset
 #'
 #'
@@ -305,21 +361,66 @@ setCovariate <- function(data, type, IDvar, L_date, L_name, categorical,
 #'                  of the same length. Must specify a strictly positive
 #'                  integer value. Cannot be missing.
 #'
-#' @param first_exp_rule specifies a binary value that indicates which of
-#'                       two algorithms is used to assign
-#'                       the first change in exposure status during follow-up.
-#'                       Default value is 1. 
-#'
-#' @param exp_threshold specifies a threshold used to assign an exposure level
-#'                      at each time interval. Must be a value
-#'                      between 0 and 1. Default value is 0.5.
-#'
 #' @param format specifies the format of the output data set. Current possible
 #'               values are "standard", or "MSM SAS macro". Default value is
-#'               "standard".
+#'               "standard". 
 #'
 #' @param dates indicates whether the output dataset should contain dates.
 #'              Default value is FALSE.
+#'
+#' @param first_exp_rule specifies a binary value that indicates which of
+#'                       two algorithms is used when the exposure is defined using
+#'                       \code{setExposure}
+#'                       to assign
+#'                       the first change in exposure status during follow-up.
+#'                       Default value is 1. Can be missing (or will be ignored)
+#'                       if the exposure is defined using
+#'                       \code{setInstantExposure}.
+#'
+#' @param exp_threshold specifies a threshold used to assign an exposure level
+#'                      at each time interval when the exposure is defined using
+#'                      \code{setExposure}. Must be a value
+#'                      between 0 and 1. Default value is 0.5.
+#'                      Can be missing (or will be ignored)
+#'                      if the exposure is defined using
+#'                      \code{setInstantExposure}.
+#'
+#' @param max_exp_var sets the limit for the maximum number of exposure
+#'                    variables that is expected to be created by the routine
+#'                    to encode the exposure levels when the exposure is defined using
+#'                    \code{setInstantExposure}.
+#'                    An error will be
+#'                    produced
+#'                    if the input exposure dataset requires the creation of a larger
+#'                    than expected number of
+#'                    exposure variables. 
+#'                    Default value is 100. Must be an integer.
+#'                    Can be missing (or will be ignored)
+#'                    if the exposure is defined using
+#'                    \code{setExposure}.
+#'
+#' @param max_cov_var sets the limit for the maximum number of 
+#'                    variables that is expected to be created by the routine
+#'                    to encode the levels of each time-dependent covariate
+#'                    when the exposure is defined using \code{setInstantExposure}.
+#'                    An error will be
+#'                    produced
+#'                    if an input time-dependent covariate dataset requires the
+#'                    creation of a larger
+#'                    than expected number of
+#'                    covariate variables. 
+#'                    Default value is 100. Must be an integer.
+#'                    Can be missing (or will be ignored)
+#'                    if the exposure is defined using
+#'                    \code{setExposure}.
+#' 
+#' @param summary_cov_var indicates the coarsening method applied in each interval
+#'                    to summarize multiple measurements of a
+#'                    time-dependent covariate into a single summary measure.
+#'                    Current possible values are "last" or "all". "last" will result
+#'                    in retaining only the last observed measurement of the covariate in
+#'                    each interval. "all" will result in retaining all observed measurements.
+#'                    Default value is "last". 
 #' 
 #' @seealso [LtAtData]
 #' 
@@ -351,36 +452,19 @@ setCovariate <- function(data, type, IDvar, L_date, L_name, categorical,
 #' LtAt.data <- construct(LtAt.specification, time_unit = 15, first_exp_rule = 1,
 #'                        exp_threshold = 0.75)
 #' 
-construct <- function(LtAtspec, time_unit, first_exp_rule = 1,
-                      exp_threshold = 0.5, format="standard", dates=FALSE) { 
+construct <- function(LtAtspec, time_unit, ...) {
 
     assert_that("LtAtData"%in%class(LtAtspec) , msg = "LtAtspec must be an object of class LtAtData" )
     assert_that( (!"logical"%in%class(LtAtspec$cohort_data) & !"logical"%in%class(LtAtspec$exp_data)), 
-               msg = if("logical"%in%class(LtAtspec$cohort_data) & "logical"%in%class(LtAtspec$exp_data)){
-                 "LtAtspec must include a valid input cohort and exposure dataset"} 
-               else if("logical"%in%class(LtAtspec$cohort_data)){
-                 "LtAtspec must include a valid input cohort dataset"} 
-               else if ("logical"%in%class(LtAtspec$exp_data)){
-                 "LtAtspec must include a valid input exposure dataset"
-               })
-    assert_that( length(time_unit)==1 && !is.na(time_unit) & class(time_unit)%in%c("integer","numeric")
-                && floor(time_unit)==time_unit , msg = "time_unit must be a non-missing integer" )
-    assert_that( time_unit>0 , msg = "time_unit must be strictly positive" )    
-    time_unit <- as.integer(time_unit) 
-    assert_that( length(first_exp_rule)==1 && class(first_exp_rule)%in%c("integer","numeric")
-                && first_exp_rule%in%c(0,1), msg = "first_exp_rule must be 0 or 1" )
-    assert_that( length(exp_threshold)==1 && !is.na(exp_threshold) & class(exp_threshold)%in%c("integer","numeric")
-                && (exp_threshold>=0 & exp_threshold<=1), msg = "exp_threshold must be a non-missing value between 0 and 1" )
-    assert_that( length(format)==1 && class(format)%in%c("character")
-                && format%in%c("standard","MSM SAS macro"), msg = "format must be 'standard' or 'MSM SAS macro'" )
-    assert_that( length(dates)==1 && !is.na(dates) & class(dates)%in%c("logical"), msg = "dates must be TRUE or FALSE" )
+                msg = if("logical"%in%class(LtAtspec$cohort_data) & "logical"%in%class(LtAtspec$exp_data)){
+                  "LtAtspec must include a valid input cohort and exposure dataset"} 
+                else if("logical"%in%class(LtAtspec$cohort_data)){
+                  "LtAtspec must include a valid input cohort dataset"} 
+                else if ("logical"%in%class(LtAtspec$exp_data)){
+                  "LtAtspec must include a valid input exposure dataset"
+                })
 
-
-    LtAtspec$createIntervals(time_unit)
-    LtAtspec$assignAC(first_exp_rule, exp_threshold)
-    LtAtspec$assignL(first_exp_rule)
-    LtAtspec$imputeL()
-    LtAtspec$cleanUp(format, dates)
+    LtAtspec$construct(time_unit, ...)
     return(LtAtspec$data)
 }
 

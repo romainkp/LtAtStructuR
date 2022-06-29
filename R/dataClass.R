@@ -527,6 +527,143 @@ expData <- R6::R6Class(
   )
 )
 
+#' Data Storage Class for instant exposure dataset
+#'
+#'
+#' Class that defines the standard format for the instant exposure dataset, i.e. the
+#' table that specifies all follow-up times during which a study
+#' subject is exposed to a non-reference exposure level. For each instantaneous
+#' exposure, the table specifies:
+#' 1) a unique subject identifier,
+#' 2) the exposure time,
+#' 3) the exposure level (required only when the exposure is not
+#'    binary).
+#'
+#' @docType class
+#'
+#' @importFrom R6 R6Class
+#' @importFrom pryr unenclose
+#' @importFrom data.table is.data.table copy setkeyv shift
+#' @importFrom lubridate is.Date now
+#' @importFrom assertthat assert_that is.string are_equal noNA
+#'
+#' @export
+#'
+#' @keywords data
+#'
+#' @return \code{instExpData} object
+#'
+#' @format \code{\link{R6Class}} object.
+#'
+#' @section Fields:
+#' \describe{
+#'     \item{\code{data}:}{\code{data.table} containing
+#'           the input exposure dataset to be wrapped in and processed.
+#'           The table can contain multiple rows per subject. There
+#'           should be no row for subjects who are only
+#'           exposed to the reference exposure level during follow-up.
+#'           Exposure levels must be encoded by one or more character, integer,
+#'           or numeric vector(s). Multiples rows per subject and time are permitted.
+#'           Cannot
+#'           contain missing values. Cannot have columns named 'IDvar',
+#'           'start_date', or 'exp_level'.
+#'     }
+#'     \item{\code{IDvar}:}{\code{character} providing the name of the column of
+#'           \code{data} that contains the unique subject identifier.
+#'     }
+#'     \item{\code{start_date}:}{\code{character} providing the name of the
+#'           column of \code{data} that contains the exposure 
+#'           date.
+#'     }
+#'     \item{\code{exp_level}:}{\code{character} vector providing the name(s) of the
+#'           column(s) of \code{data} that contain(s) the non-reference exposure
+#'           level(s). Can be missing if there is only one non-reference exposure level.
+#'           If missing, the exposure is assumed to be binary and its reference
+#'           level is encoded by 0.
+#'    }
+#'    }
+
+instExpData <- R6::R6Class(
+  classname = "instExpData",                       
+  inherit = expData,
+  public = list(
+    initialize = function(data, IDvar, start_date, exp_level = NA) {
+      
+      ## Check valid argument types and make copy of data to avoid overwritting user data
+      assertthat::assert_that(data.table::is.data.table(data),
+        msg = "data is not a data.table object."
+      )
+      dataDT <- data.table::copy(data)
+
+      assert_that(is.string(IDvar))
+      assert_that(is.string(start_date))
+      if (!are_equal(exp_level,NA)) {
+          assert_that(is.character(exp_level))
+          assert_that(all(!is.na(exp_level)), msg = "exp_level cannot contain a missing value")
+      } else { # Handle missing elements: define a unique column name for exp_level
+        expCol <- "expLevel"
+        while (expCol %in% names(dataDT))
+            expCol <- expCol %+% as.integer(now("UTC")) %+% "UTC"
+        exp_level <- expCol
+        dataDT[, eval(exp_level) := 1L]
+        warning("exp_level was missing: the reference and non-reference levels for the binary exposure are set to 0 and 1, respectively.")
+      }
+            
+      ## Check table contains all columns referenced
+      assert_that(all(c(IDvar, start_date, exp_level) %in% names(dataDT)))
+      ## Check table contains no unallowed columns names
+      assert_that(!any(c("IDvar", "start_date", "exp_level") %in% names(dataDT)), msg = "Columns of data cannot be named 'IDvar', 'start_date', or 'exp_level'.")
+        
+      ## Check table content
+      assert_that(noNA(dataDT), msg = "data contains missing values.")
+      ## Check valid IDvar column content and standardize if not
+      if (!is.character(dataDT[, get(IDvar)])) {
+        IDvarClass <- class(dataDT[, get(IDvar)])
+        assert_that(IDvarClass %in% c("factor", "numeric", "integer", "character"), msg = "Class of IDvar column in data is not valid: unique subject identifiers must be encoded by a factor, numeric, integer, or character vector.")
+        dataDT[, eval(IDvar) := as.character(get(IDvar))]
+        warning("Coercing elements of IDvar column from ", IDvarClass, " to character\n", call. = FALSE)
+      }
+      assert_that(lubridate::is.Date(dataDT[, get(start_date)]), msg = "Class of start_date in data is not valid: start dates of exposure episodes must be encoded by a date vector.")
+      assert_that( all(lapply(dataDT[, mget(exp_level)],class) %in% c("character", "integer","numeric")) , msg = "A class of an exp_level column in data is not valid: non-reference exposure levels must be encoded by character, integer, or numeric vector(s).")
+
+      ## remove all unnecessary columns, point out what will be ignored, and standardize ordering in process (no need to use setcolorder since subsetting)
+      dataDT <- dataDT[, c(IDvar, start_date, exp_level), with = FALSE]
+      ## order by IDvar and start date
+      data.table::setkeyv(dataDT, c(IDvar, start_date))
+      ## warn which columns where ignored
+      ignoredCol <- names(data)[!names(data) %in% intersect(names(dataDT), names(data))]
+      if (length(ignoredCol) > 0) warning("Ignoring the following column(s) in data: ", paste(ignoredCol, collapse = " "), ".")
+
+      private$.data <- dataDT
+      private$.IDvar <- IDvar
+      private$.start_date <- start_date
+      private$.exp_level <- exp_level
+    },
+    checkAgainst = function(otherData) {
+      if ("cohortData" %in% class(otherData)) {
+        assert_that(private$.IDvar == otherData$IDvar, msg = "exposure and cohort datasets must use the same column name to store unique subject identifiers.")
+        assert_that(all(private$.data[!get(private$.IDvar)%in%otherData$IDs_ignore, get(private$.IDvar)] %in% otherData$data[, get(otherData$IDvar)]), msg = "Subject identifiers in the exposure dataset must also be found in the cohort dataset.")
+        ## Identify exposure rows that need to be modified or removed (index/eof date):
+        private$.data <- merge(private$.data, otherData$data[, c(otherData$IDvar, otherData$index_date, otherData$EOF_date), with = FALSE], by = private$.IDvar, all.x = TRUE, all.y = FALSE)
+        expEpisode.ignored <- private$.data[get(private$.start_date) < get(otherData$index_date) | get(private$.start_date) > get(otherData$EOF_date) , .N]
+        if (expEpisode.ignored > 0) {
+          warning("Found at least one exposure date before a subject's index date or after a subject's end of follow-up. Information on such exposure will be ignored.")
+          ## remove episodes with end dates strictly before index dates
+          private$.data <- private$.data[get(private$.start_date) >= get(otherData$index_date), ]
+          ## remove episodes with start dates strictly after EOF dates
+          private$.data <- private$.data[get(private$.start_date) <= get(otherData$EOF_date), ]
+
+          assert_that(private$.data[get(private$.start_date) < get(otherData$index_date) | get(private$.start_date) > get(otherData$EOF_date) , .N] == 0)
+          data.table::setkeyv(private$.data, c(private$.IDvar, private$.start_date))
+        }
+        ## remove columns added from merge
+        private$.data[, ":="(c(otherData$index_date, otherData$EOF_date), vector("list", 2))]
+      }
+      invisible(self)
+    }
+  )
+)
+
 
 #' Data Storage Class for a time-dependent covariate dataset
 #'
@@ -809,9 +946,9 @@ timeDepCovData <- R6::R6Class(
 #'
 #' @importFrom R6 R6Class
 #' @importFrom pryr unenclose
-#' @importFrom data.table is.data.table copy setkeyv shift rbindlist setcolorder setorderv data.table
+#' @importFrom data.table is.data.table copy setkeyv shift rbindlist setcolorder setorderv data.table merge.data.table
 #' @importFrom lubridate is.Date %within% interval as_date int_start int_end ymd interval int_overlaps intersect
-#' @importFrom assertthat assert_that is.string noNA is.flag
+#' @importFrom assertthat assert_that is.string noNA is.flag are_equal
 #' @importFrom future.apply future_lapply
 #'
 #' @export
@@ -875,13 +1012,23 @@ LtAtData <- R6::R6Class(
     .data = NA,
     .cohort_data = NA,
     .exp_data = NA,
-    .cov_data = NA
+    .cov_data = NA,
+    .time_unit = NA, 
+    .format=NA,
+    .dates=NA,
+    .first_exp_rule = NA,
+    .exp_threshold = NA
   ),
   active = list(
     data = readOnly(".data"),
     cohort_data = readOnly(".cohort_data"),
     exp_data = readOnly(".exp_data"),
-    cov_data = readOnly(".cov_data")
+    cov_data = readOnly(".cov_data"),
+    time_unit = readOnly(".time_unit"),
+    format = readOnly(".format"),
+    dates = readOnly(".dates"),
+    first_exp_rule = readOnly(".first_exp_rule"),
+    exp_threshold = readOnly(".exp_threshold")    
   ),
   public = list(
     initialize = function() {
@@ -889,6 +1036,11 @@ LtAtData <- R6::R6Class(
       private$.cohort_data <- NA
       private$.exp_data <- NA
       private$.cov_data <- NA
+      private$.time_unit <- NA
+      private$.first_exp_rule <- NA
+      private$.exp_threshold <- NA
+      private$.format <- NA
+      private$.dates <- NA
       invisible(self) # critical to allow method chaining
     },
     addSpec = function(spec) {
@@ -944,7 +1096,68 @@ LtAtData <- R6::R6Class(
       }
       invisible(self) # critical to allow method chaining
     },
-    createIntervals = function(time_unit) {
+    construct = function(time_unit, ...) {
+
+        self$setAlgoOptions(time_unit, ...)
+        self$createIntervals()
+        self$assignAC()
+        self$assignL()
+        self$imputeL()
+        self$cleanUp()
+        
+        invisible(self)
+    },
+    setAlgoOptions = function(time_unit, ...){
+        ## Validate named argument
+        assert_that( length(time_unit)==1 && !is.na(time_unit) & class(time_unit)%in%c("integer","numeric")
+                    && floor(time_unit)==time_unit , msg = "time_unit must be a non-missing integer" )
+        assert_that( time_unit>0 , msg = "time_unit must be strictly positive" )    
+        private$.time_unit <- as.integer(time_unit) 
+        ## Handle all other arguments
+        inputArgs <- list(...)
+        if(length(inputArgs)>0){
+            inputArgsName <- sort(names(inputArgs))
+            requiredArgsName <- sort(c("first_exp_rule", "exp_threshold", "format", "dates"))
+            ## Warm user of all ... arguments that will be ignored (i.e., all the ones not required by the doc)
+            notSureWhat2toDoWith <- inputArgsName[!inputArgsName%in%requiredArgsName]
+            if(length(notSureWhat2toDoWith)>0)warning("The following arguments will be ignored: "%+%notSureWhat2toDoWith%+%". ")
+        }
+        ## set required ... arguments to stated default
+        private$.first_exp_rule <- 1
+        private$.exp_threshold <- 0.5
+        private$.format <- "standard"
+        private$.dates <- FALSE
+        ## Overwrite default values for required ... argument with user-provided ones but give error if provided values are not allowed
+        if(length(inputArgs)>0){
+            if("first_exp_rule"%in%inputArgsName){
+                first_exp_rule <- inputArgs$first_exp_rule
+                assert_that( length(first_exp_rule)==1 && class(first_exp_rule)%in%c("integer","numeric")
+                            && first_exp_rule%in%c(0,1), msg = "first_exp_rule must be 0 or 1" )
+                private$.first_exp_rule <- first_exp_rule
+            }
+            if("exp_threshold"%in%inputArgsName){
+                exp_threshold <- inputArgs$exp_threshold
+                assert_that( length(exp_threshold)==1 && !is.na(exp_threshold) & class(exp_threshold)%in%c("integer","numeric")
+                            && (exp_threshold>=0 & exp_threshold<=1), msg = "exp_threshold must be a non-missing value between 0 and 1" )
+                private$.exp_threshold <- exp_threshold
+            }
+            if("format"%in%inputArgsName){
+                format <- inputArgs$format
+                assert_that( length(format)==1 && class(format)%in%c("character")
+                            && format%in%c("standard","MSM SAS macro"), msg = "format must be 'standard' or 'MSM SAS macro'" )
+                private$.format <- format
+            }
+            if("dates"%in%inputArgsName){
+                dates <- inputArgs$dates
+                assert_that( length(dates)==1 && !is.na(dates) & class(dates)%in%c("logical"), msg = "dates must be TRUE or FALSE" )
+                private$.dates <- dates
+            }
+        }
+        invisible(self)
+       },
+    createIntervals = function() {
+
+        time_unit <-  private$.time_unit
       ## Confirm that all time-dependent variables were added
       missingTimeDep <-   sort(private$.cohort_data$L0)[!sort(private$.cohort_data$L0)%in%sort(c(names(private$.cohort_data$L0_timeIndep),names(private$.cov_data)))]
       assertthat::assert_that( identical( sort(private$.cohort_data$L0),
@@ -998,8 +1211,10 @@ LtAtData <- R6::R6Class(
       ##
       invisible(self)
     },
-    assignAC = function(firs_exp_rule = 1, exp_threshold = 0.5) {
+    assignAC = function() {
 
+      firs_exp_rule <- private$.first_exp_rule
+      exp_threshold <- private$.exp_threshold
       # pointer to data sources for convenience
       exp_data <- private$.exp_data$data
       cohort_data <- private$.cohort_data$data
@@ -1016,7 +1231,7 @@ LtAtData <- R6::R6Class(
       eof_date <- private$.cohort_data$EOF_date
       eof_type <- private$.cohort_data$EOF_type
       y_name <- private$.cohort_data$Y_name
-
+        
       # loop over individuals
       data_sliced_by_id <-
         #lapply(
@@ -1558,7 +1773,7 @@ LtAtData <- R6::R6Class(
               ])
             }
           }
-        )
+        ) # end of future_lapply
         
       # combined list of data.tables together and sort by ID
       data_assigned_ac <- data.table::rbindlist(data_sliced_by_id)
@@ -1673,8 +1888,9 @@ LtAtData <- R6::R6Class(
       # print(sum(model_output$case != data_assigned_ac$case) /
       # length(data_assigned_ac$case) * 100)
     },
-    assignL = function(first_exp_rule = 1) {
+    assignL = function() {
 
+      first_exp_rule <- private$.first_exp_rule
       # pointer to data sources for convenience
       outcome_data <- private$.data
       cohort_data <- private$.cohort_data$data
@@ -1693,16 +1909,16 @@ LtAtData <- R6::R6Class(
       # "sporadic": A1c in GS2
 
         ## looping over time-dependent covariates
-
         if(any(!is.na(private$.cov_data))){ ### ATTENTION: If code produced extra warnings, try !is.na(private$.cov_data)[1]
+              
           for(cov_position in seq_along(private$.cov_data)){
-            
+              
             # extract data for the current covariate only
             cov_data <- private$.cov_data[[cov_position]]
             cov_name <- private$.cov_data[[cov_position]]$L_name
             cov_acute <- private$.cov_data[[cov_position]]$acute_change
             cov_date <- private$.cov_data[[cov_position]]$L_date
-            
+
             # iterative over subject IDs in parallel to assign L(t)
             data_assigned_lt_by_id <-
               future.apply::future_lapply(unique(outcome_data[, get(id_var)]),
@@ -2411,15 +2627,14 @@ LtAtData <- R6::R6Class(
               data_assigned_lt_by_id <- data_assigned_lt_by_id[,c(id_var,"intnum",cov_name,cov_date),with=FALSE]
               data.table::setnames(data_assigned_lt_by_id, cov_date,
                                    paste0("dt", cov_name))
-              data_assigned_lt <- merge(data_assigned_lt,data_assigned_lt_by_id,by=c(id_var,"intnum"),all=TRUE)
+              data_assigned_lt <- data.table::merge.data.table(data_assigned_lt,data_assigned_lt_by_id,by=c(id_var,"intnum"),all=TRUE)
             }
-          }  # END: loop over covariates
-        } else {
+          } # END: loop over covariates, i.e. end of for(cov_position in seq_along(private$.cov_data)){...
+        } else { ## if there is no time-dep covariates, i.e. else following if(any(!is.na(private$.cov_data))){..}
           data_assigned_lt <- outcome_data
         }
     
       ## For loop for time-indepent
-      
       data.table::setkeyv(data_assigned_lt, c(id_var,"intnum"))
       
       # Assign time-independent covariates
@@ -2478,8 +2693,10 @@ LtAtData <- R6::R6Class(
         data.table::setkeyv(private$.data, c(private$.cohort_data$IDvar,"intnum"))
         invisible(self)
     },
-    cleanUp = function(format, dates){
+    cleanUp = function(){
 
+        format <- private$.format
+        dates <- private$.dates
         ## Create object that will be used to reorder covariates in a standardized fashion
         timeIndep <- names(private$.cohort_data$L0_timeIndep)
         names(timeIndep) <- timeIndep
@@ -2495,19 +2712,19 @@ LtAtData <- R6::R6Class(
         names(I.timeDep) <- timeDep%+%".2"
         timeDepOrdered <- as.character(c(timeDep,dt.timeDep,I.timeDep)[sort(names(c(timeDep,dt.timeDep,I.timeDep)))])
         timeDepOrdered <- timeDepOrdered[timeDepOrdered%in%names(private$.data)]
+
         orderedCol <- c(private$.cohort_data$IDvar,"intnum","intstart","intend",private$.cohort_data$EOF_type,"outcome","censor",timeIndepOrdered,timeDepOrdered,"exposure")
         if(all(c("tie","A0.warn")%in%names(private$.data)))orderedCol <- c(orderedCol,"tie","A0.warn")
         
         if(any(!is.na(private$.cov_data))){ ### ATTENTION: If code produced extra warnings, try !is.na(private$.cov_data)[1]
-          assert_that( all(sort(names(private$.data)[ !names(private$.data)%in%orderedCol ])==c("case","caseExp")) , msg = "some columns might need exporting")
+            assert_that( all(sort(names(private$.data)[ !names(private$.data)%in%orderedCol ])==c("case","caseExp")) , msg = "some columns might need exporting")
         } else{
-          assert_that( all(sort(names(private$.data)[ !names(private$.data)%in%orderedCol ])==c("case")) , msg = "some columns might need exporting")
+            assert_that( all(sort(names(private$.data)[ !names(private$.data)%in%orderedCol ])==c("case")) , msg = "some columns might need exporting")
         }
-        #assert_that( all(sort(names(private$.data)[ !names(private$.data)%in%orderedCol ])==c("case","caseExp")) , msg = "some columns might need exporting")
+        private$.data <- suppressWarnings(private$.data[ , -c("caseExp","case"), with=FALSE])            
         
         ## Remove unneeded columns
-        private$.data <- suppressWarnings(private$.data[ , -c("caseExp","case"), with=FALSE])
-        if(!dates){
+         if(!dates){
             col2remove <- unlist(lapply(private$.data,class))=="Date"
             col2remove <- names(col2remove)[col2remove]
             private$.data <- private$.data[ , -col2remove, with=FALSE]
@@ -2533,5 +2750,497 @@ LtAtData <- R6::R6Class(
         data.table::setkeyv(private$.data, c(private$.cohort_data$IDvar,"intnum"))
         invisible(self)
     }
+  )
+)
+
+#' Data Storage Class for LtAt dataset based on instant exposure
+#'
+#'
+#' Class that defines the specifications for constructing an LtAt dataset and the dataset itself
+#' using an instant exposure dataset.
+#'
+#' @docType class
+#'
+#' @importFrom data.table foverlaps
+#'
+#' @export
+#'
+#' @keywords data
+#'
+#' @return \code{LtAtDataInst} object
+#'
+#' @format \code{\link{R6Class}} object.
+#'
+#' @section Fields:
+#' \describe{
+#'     \item{\code{data}:}{\code{data.table} containing
+#'           the LtAt dataset. NULL by default before construction.
+#'     }
+#'     \item{\code{cohort_data}:}{\code{cohortData} specifying the cohort dataset.
+#'     }
+#'     \item{\code{exp_data}:}{\code{expData} specifying the time-varying exposure dataset.
+#'           Its \code{IDvar} field must contain the same value as that of the
+#'           \code{cohort_data} (i.e.,
+#'           the same column name must be used for the ID column of the exposure and cohort
+#'           datasets). The unique subject identifiers in the \code{data} field of \code{exp_data}
+#'           must be a subset of those founds in the \code{data} field of \code{cohort_data} (i.e.,
+#'           all IDs in the exposure dataset must also be present in the cohort dataset.)
+#'           An exposure measurement stored in the \code{data} field of \code{exp_data}
+#'           will be ignored
+#'           if its date is either strictly before the subject's index date stored in the
+#'           \code{data} field of \code{cohort_data} or strictly after the subject's end of
+#'           follow-up date stored in the \code{data} field of \code{cohort_data} (i.e., only
+#'           exposure measurements collected between the start and end of follow-up will be
+#'           retained).
+#'     }
+#'     \item{\code{cov_data}:}{a list of \code{timeDepCovData} that
+#'           specifies time-varying covariate(s). Each element of the list must have a distinct
+#'           value stored in its \code{L_name} field and this value must also be found in the
+#'           \code{L0} field of \code{cohort_data} (i.e., time-varying covariates cannot have
+#'           the same name and must have their baseline measurements stored in the cohort dataset).
+#'           The \code{IDvar} field of each element \code{timeDepCovData} of \code{cov_data}
+#'           must contain the same value as
+#'           that of the \code{cohort_data} (i.e.,
+#'           the same column name must be used for the ID column of each covariate dataset and
+#'           that of the cohort dataset). The unique subject identifiers in the \code{data}
+#'           field of each element
+#'           \code{timeDepCovData} of \code{cov_data}
+#'           must be a subset of those founds in the \code{data} field of \code{cohort_data} (i.e.,
+#'           all IDs in a covariate dataset must also be present in the cohort dataset.)
+#'           A covariate measurement stored in the \code{data} field of an element
+#'           \code{timeDepCovData}
+#'           of \code{cov_data} will be ignored
+#'           if its date is either strictly before the subject's index date stored in the
+#'           \code{data} field of \code{cohort_data} or strictly after the subject's end of
+#'           follow-up date stored in the \code{data} field of \code{cohort_data}. (i.e., only
+#'           covariate measurements collected between the start and end of follow-up will be
+#'           retained).
+#'     }
+#'    }
+
+LtAtDataInst <- R6::R6Class(
+  classname = "LtAtDataInst",                       
+  inherit = LtAtData,
+  private = list(
+      .max_exp_var = NA,
+      .max_cov_var = NA,
+      .summary_cov_var = NA
+  ),
+  active = list(
+      max_exp_var = readOnly(".max_exp_var"),
+      max_cov_var = readOnly(".max_cov_var"),
+      summary_cov_var = readOnly(".summary_cov_var")
+  ),
+  public = list(
+    initialize = function() {
+      private$.max_exp_var <- NA
+      private$.max_cov_var <- NA
+      private$.summary_cov_var <- NA
+      invisible(self) # critical to allow method chaining
+    },
+    copyLtAtData = function(LtAtObject) {
+        assert_that("LtAtData"%in%class(LtAtObject) & !"LtAtDataInst"%in%class(LtAtObject))
+        private$.data <- LtAtObject$data
+        private$.cohort_data <- LtAtObject$cohort_data
+        private$.exp_data <- LtAtObject$exp_data
+        private$.cov_data <- LtAtObject$cov_data
+        private$.summary_cov_var <- LtAtObject$summary_cov_var
+        private$.time_unit <- LtAtObject$time_unit
+        private$.first_exp_rule <- LtAtObject$first_exp_rule
+        private$.exp_threshold <- LtAtObject$exp_threshold
+        private$.format <- LtAtObject$format
+        private$.dates <- LtAtObject$dates
+        invisible(self) # critical to allow method chaining
+    },
+    construct = function(time_unit, ...) {
+
+        self$setAlgoOptions(time_unit, ...)
+        super$createIntervals()
+        self$assignAC()
+        self$assignL()
+        super$imputeL()
+        self$cleanUp()
+        
+        invisible(self)
+    },
+    setAlgoOptions = function(time_unit, ...){
+        ## Validate named argument
+        assert_that( length(time_unit)==1 && !is.na(time_unit) & class(time_unit)%in%c("integer","numeric")
+                    && floor(time_unit)==time_unit , msg = "time_unit must be a non-missing integer" )
+        assert_that( time_unit>0 , msg = "time_unit must be strictly positive" )    
+        private$.time_unit <- as.integer(time_unit) 
+        ## Handle all other arguments
+        inputArgs <- list(...)
+        if(length(inputArgs)>0){
+            inputArgsName <- sort(names(inputArgs))
+            requiredArgsName <- sort(c("max_exp_var", "max_cov_var","summary_cov_var", "format", "dates"))
+            ## Warm user of all ... arguments that will be ignored (i.e., all the ones not required by the doc)
+            notSureWhat2toDoWith <- inputArgsName[!inputArgsName%in%requiredArgsName]
+            if(length(notSureWhat2toDoWith)>0)warning("The following arguments will be ignored: "%+%notSureWhat2toDoWith%+%". ")
+        }
+        ## set required ... arguments to stated default
+        private$.max_exp_var <- 100L
+        private$.max_cov_var <- 100L
+        private$.summary_cov_var <- "last"
+        private$.format <- "standard"
+        private$.dates <- FALSE
+        ## Overwrite default values for required ... argument with user-provided ones but give error if provided values are not allowed
+        if(length(inputArgs)>0){
+            if("max_exp_var"%in%inputArgsName){
+                max_exp_var <- inputArgs$max_exp_var
+                assert_that( length(max_exp_var)==1 && !is.na(max_exp_var) & class(max_exp_var)%in%c("integer","numeric")
+                            && floor(max_exp_var)==max_exp_var , msg = "max_exp_var must be a non-missing integer" )
+                assert_that( max_exp_var>0 , msg = "max_exp_var must be strictly positive" )    
+                max_exp_var <- as.integer(max_exp_var) 
+                private$.max_exp_var <- max_exp_var
+            }
+            if("max_cov_var"%in%inputArgsName){
+                max_cov_var <- inputArgs$max_cov_var
+                assert_that( length(max_cov_var)==1 && !is.na(max_cov_var) & class(max_cov_var)%in%c("integer","numeric")
+                            && floor(max_cov_var)==max_cov_var , msg = "max_cov_var must be a non-missing integer" )
+                assert_that( max_cov_var>0 , msg = "max_cov_var must be strictly positive" )    
+                max_cov_var <- as.integer(max_cov_var) 
+                private$.max_cov_var <- max_cov_var
+            }
+            if("summary_cov_var"%in%inputArgsName){
+                summary_cov_var <- inputArgs$summary_cov_var
+                assert_that( length(summary_cov_var)==1 && class(summary_cov_var)%in%c("character")
+                            && summary_cov_var%in%c("last","all"), msg = "summary_cov_var must be 'last' or 'all'" )
+                private$.summary_cov_var <- summary_cov_var
+            }
+            if("format"%in%inputArgsName){
+                format <- inputArgs$format
+                assert_that( length(format)==1 && class(format)%in%c("character")
+                            && format%in%c("standard","MSM SAS macro"), msg = "format must be 'standard' or 'MSM SAS macro'" )
+                private$.format <- format
+            }
+            if("dates"%in%inputArgsName){
+                dates <- inputArgs$dates
+                assert_that( length(dates)==1 && !is.na(dates) & class(dates)%in%c("logical"), msg = "dates must be TRUE or FALSE" )
+                private$.dates <- dates
+            }
+        }
+        invisible(self)
+    },
+    assignAC = function() {
+
+        max_exp_var <- private$.max_exp_var
+        ## pointer to data sources for convenience
+        exp_data <- private$.exp_data$data
+        cohort_data <- private$.cohort_data$data
+        outcome_data <- private$.data
+
+        ## pointers for exposure data
+        start_date <- private$.exp_data$start_date
+        exp_level <- private$.exp_data$exp_level
+
+        ## pointers for cohort data
+        id_var <- private$.cohort_data$IDvar
+        eof_type <- private$.cohort_data$EOF_type
+        
+        index_date <- private$.cohort_data$index_date
+        time_unit <- as.numeric(outcome_data[1,intend-intstart+1])
+        data_assigned_ac <- merge(exp_data, cohort_data[, c(id_var,index_date), with = FALSE], by = id_var, all.x = TRUE,all.y = FALSE) # data_assigned_ac <- merge(exp_data,cohort_data[,c(id_var,index_date,eof_type),with=FALSE],by=id_var,all.x=TRUE,all.y=FALSE)
+        outcome_data <- merge(outcome_data, cohort_data[, c(id_var,eof_type), with = FALSE], by = id_var, all.x = TRUE, all.y = FALSE)
+        ## Assign each exposure observation to the interval number in which it occurs
+        data_assigned_ac[,intnum:=as.numeric(ceiling((get(start_date)-get(index_date)+1)/time_unit-1))]
+        data_assigned_ac[,eval(index_date):=NULL]
+        ## Validate correct intnum assignment - only run if need to debug:
+        ## data_assigned_ac <- merge(data_assigned_ac,outcome_data[,c(id_var,"intnum","intstart","intend"),with=FALSE],by=c(id_var,"intnum"),all.x=TRUE,all.y=FALSE)
+        ## assert_that(data_assigned_ac[,all(get(start_date)>=intstart & get(start_date)<=intend)])
+
+        ## assign C
+        outcome_data[,maxIntnum:=max(intnum),by=id_var]
+        outcome_data[,censor:=0] # initialize
+        outcome_data[intnum==maxIntnum & outcome==0, censor:=1]
+        outcome_data[,maxIntnum:=NULL]
+        
+        ## Merge exposure information to outcome data and reformat from long format (repeated exposures by interval) into wide format (1 obs per ID and intnum)
+        data_assigned_ac <- merge(outcome_data,data_assigned_ac,by=c(id_var,"intnum"),all.x=TRUE,all.y=FALSE)
+        ## Identify maximum number of exposure per ID and intnum and order data by start_date and exp_level within ID and intnum so that wide format correctly captures temporal ordering of fills in each interval
+        setkeyv(data_assigned_ac, c(id_var,"intnum",start_date,exp_level))
+        data_assigned_ac[,cntExp:=(1:.N),by=c(id_var,"intnum")]
+        data_assigned_ac[,maxExp:=max(cntExp),by=c(id_var,"intnum")]
+        nExp <- data_assigned_ac[,max(cntExp)]
+        ## Define total number of exposures and fill out their values after figuring out what class each exposure column is
+        NAexp <- c("NA_integer_","as_date(NA)")
+        for(exp.i in exp_level)NAexp <- c(NAexp, ifelse(is.integer(data_assigned_ac[,get(exp.i)]),"NA_integer_", ifelse(is.character(data_assigned_ac[,get(exp.i)]), "NA_character_", "NA_real_")))
+        initializeExp <- eval(parse(text=("data.table("%+%paste(rep(NAexp,nExp),collapse=",")%+%")")))
+        assert_that(ncol(initializeExp)<=max_exp_var, msg = "The number of exposure variables required to encode all possible exposure levels exceed the maximum number allowed, i.e. "%+%max_exp_var%+%". If this is expected, set 'max_exp_var' to a larger value to prevent this error message.")
+        data_assigned_ac[,`:=`( c("exposure",start_date,exp_level)%+%"."%+%rep(1:nExp,each=length(exp_level)+2), initializeExp )]
+        assert_that(identical(key(data_assigned_ac),c(id_var,"intnum",start_date,exp_level)))
+        for(i.exp in 1:nExp){
+            data_assigned_ac[cntExp==i.exp, "exposure."%+%i.exp := ifelse(is.na(get(start_date)), 0L, 1L)]
+            data_assigned_ac[cntExp==i.exp & get("exposure."%+%i.exp)==1L , `:=`( start_date%+%"."%+%i.exp , get(start_date) ) ]
+            data_assigned_ac[cntExp==i.exp & get("exposure."%+%i.exp)==1L , `:=`( exp_level%+%"."%+%i.exp , mget(exp_level) ) ]
+            if(i.exp>1)for(i.level in c("exposure",start_date,exp_level)){
+                           data_assigned_ac[ maxExp>=i.exp & cntExp<=i.exp , LOVCB := rev(cumsum(!is.na(rev(get(i.level%+%"."%+%i.exp))))) , by = c(id_var, "intnum") ]
+                           data_assigned_ac[ maxExp>=i.exp & cntExp<=i.exp , i.level%+%"."%+%i.exp := get(i.level%+%"."%+%i.exp)[.N] , by = c(id_var, "intnum", "LOVCB") ] ## implement last observed value carried backward ny ID and intnum so that we can dedup later on each column
+                       }
+        }
+        data_assigned_ac <- data_assigned_ac[cntExp==1,] # dedup
+        assert_that(nrow(data_assigned_ac)==nrow(outcome_data))
+        for(i.exp in 1:nExp)data_assigned_ac[ is.na(get("exposure."%+%i.exp)), "exposure."%+%i.exp := 0L]
+        cleanUp <- c(exp_level,start_date,"cntExp")
+        if(nExp>1)cleanUp <- c(cleanUp,"LOVCB")
+        data_assigned_ac[,`:=`( eval(cleanUp) , vector("list",length(cleanUp)) )]
+        ## replace maxExp so it encodes the number of non-reference level(s) experience at time t
+        data_assigned_ac[maxExp%in%1 & exposure.1%in%0, maxExp:=0]
+        ## output
+        private$.data <- data_assigned_ac
+        invisible(self)
+    },
+    assignL = function() {
+
+        max_cov_var <- private$.max_cov_var
+        ## pointer to data sources for convenience
+        outcome_data <- private$.data
+        cohort_data <- private$.cohort_data$data
+        id_var <- private$.cohort_data$IDvar
+        eof_date_var <- private$.cohort_data$EOF_date
+        eof_type_var <- private$.cohort_data$EOF_type
+        index_date_var <- private$.cohort_data$index_date
+        start_date_var <- private$.exp_data$start_date
+        t_ind_cov <- private$.cohort_data$L0[!private$.cohort_data$L0%in%names(private$.cov_data)]
+
+        ## looping over time-dependent covariates
+        if(any(!is.na(private$.cov_data))){ ### ATTENTION: If code produced extra warnings, try !is.na(private$.cov_data)[1]
+        data_assigned_lt_bycov <- future.apply::future_lapply(seq_along(private$.cov_data),function(cov_position){
+            ## for(cov_position in seq_along(private$.cov_data)){
+                
+                ## extract data for the current covariate only
+                cov_data <- private$.cov_data[[cov_position]]
+                cov_name <- private$.cov_data[[cov_position]]$L_name
+                cov_acute <- private$.cov_data[[cov_position]]$acute_change
+                cov_date <- private$.cov_data[[cov_position]]$L_date
+
+                time_unit <- as.numeric(outcome_data[1,intend-intstart+1])
+                ## Define for each interval the window of time for which L(t)'s should be searched for each subject
+                assignment_conditions <- outcome_data[,c(id_var,"intnum","intstart","intend","outcome","censor","exposure.1",start_date_var %+% ".1"), with=FALSE]
+                assignment_conditions <- merge(assignment_conditions,cohort_data[,c(id_var,eof_date_var),with=FALSE],by=id_var,all.x=TRUE,all.y=FALSE)
+                ## handle t==0
+                assignment_conditions[ intnum==0 , Ldt_low:=intstart ]
+                assignment_conditions[ intnum==0 & exposure.1==1, Ldt_up:= pmax( Ldt_low, get(start_date_var %+% ".1")-as.numeric(cov_acute) ) ]
+                assignment_conditions[ intnum==0 & exposure.1==0, Ldt_up:= intstart ]
+                assignment_conditions[ intnum==0 & censor%in%1 , Ldt_up:= pmax( Ldt_low, get(eof_date_var)-as.numeric(cov_acute) )]
+                ## handle t>0
+                assignment_conditions[ intnum>0 , Ldt_low:=intstart-time_unit ]
+                assignment_conditions[ intnum>0 & exposure.1==1, Ldt_up:= pmax( Ldt_low, get(start_date_var %+% ".1")-as.numeric(cov_acute) ) ]
+                assignment_conditions[ intnum>0 & exposure.1==0, Ldt_up:= intstart-1 ]
+                assignment_conditions[ intnum>0 & censor%in%1 , Ldt_up:= pmax( Ldt_low, get(eof_date_var)-as.numeric(cov_acute) ) ]
+                ## search window for when outcome==1
+                assignment_conditions[ outcome%in%1 , Ldt_low:=intstart-time_unit ]
+                assignment_conditions[ outcome%in%1, Ldt_up := get(eof_date_var) ]
+                ## finalize search windows
+                assignment_conditions <- assignment_conditions[, c(id_var,"intnum","Ldt_low","Ldt_up"), with=FALSE]
+                assert_that(assignment_conditions[,all(Ldt_low<=Ldt_up)])
+
+                ## Bring in covariate data (including baseline value from cohort, note that we might end up with 2 measures on index, will
+                ## need to order these 2 as cohort first then time-dep measurement next)
+                covData2 <- cohort_data[, c(id_var, index_date_var ,cov_name), with=FALSE]
+                covData2[, fromTimeDep:=0]
+                setnames(covData2, index_date_var, cov_date)
+                covData <- copy(cov_data$data)
+                covData[, fromTimeDep:=1]
+                setcolorder(covData, c(id_var, cov_date ,cov_name, "fromTimeDep"))
+                covData <- rbind(covData,covData2)
+                covData[,cov_date%+%"_cp":=get(cov_date)]
+                setkeyv(covData ,c(id_var,cov_date,cov_date%+%"_cp"))
+                assignment_conditions <- data.table::foverlaps(assignment_conditions, covData, by.x=c(id_var,"Ldt_low", "Ldt_up"), by.y=c(id_var,cov_date,cov_date%+%"_cp"), type="any", mult="all", nomatch=NA)
+                assignment_conditions[,cov_date%+%"_cp":=NULL]
+                assert_that(assignment_conditions[ !is.na(get(cov_date)) , all(get(cov_date)>=Ldt_low)])
+                assert_that(assignment_conditions[ !is.na(get(cov_date)) , all(get(cov_date)<=Ldt_up)])
+                ## Remove covariate values assigned more than once (remove all but the first of the redundant information)
+                setkeyv(assignment_conditions, c(id_var,"intnum"))
+                assignment_conditions[ !is.na(get(cov_date)) , ncount:=1:.N, by=c(id_var,cov_date,cov_name)]
+                ## validate that redundant assignment of same L indexed by ncount>1 have larger intnum values that for the first assignment of L with ncount=1
+                assignment_conditions[ !is.na(get(cov_date)) , intcheck := as.integer(intnum[1]+(ncount-1)), by=c(id_var,cov_date,cov_name)]
+                assert_that(identical(assignment_conditions[ !is.na(get(cov_date)) , intcheck],assignment_conditions[ !is.na(get(cov_date)) , intnum] ))
+                assignment_conditions[ , intcheck:=NULL ]
+                ## last assert indicates that we can delete redudant L assignent in bins with ncount>1
+                assignment_conditions[ !is.na(get(cov_date)) & ncount>1, `:=`( c(cov_date, cov_name), NA ) ]
+                assignment_conditions[ , ncount:=NULL ]
+                ## remove rows with cov_date = NA if indexed by intnum value for that patient has already has another row with cov_date!=NA
+                assignment_conditions[  , ncount:=.N, by=c(id_var,"intnum")]
+                assignment_conditions[ ncount>1 & is.na(get(cov_date)), ncountNA:=.N, by=c(id_var,"intnum") ]
+                ## remove NA rows for (ID,t) combo that have strictly fewer NA rows for L than total number of rows
+                removeNAs <- assignment_conditions[ , which(ncount>1 & is.na(get(cov_date)) & ncount>ncountNA) ]
+                if(length(removeNAs)>0)assignment_conditions <- assignment_conditions[ -removeNAs ,]
+                assignment_conditions[, rowKeep:=1] # initialize
+                if(nrow(assignment_conditions[ ncount>1 & is.na(get(cov_date)) & ncount==ncountNA])>0)assignment_conditions[ ncount>1 & is.na(get(cov_date)) & ncount==ncountNA, rowKeep:=1:.N , by=c(id_var,"intnum") ]
+                ## remove all but 1 of the NA rows for (ID,t) combo that have all NA rows for L
+                removeNAs <- assignment_conditions[ , which(ncount>1 & is.na(get(cov_date)) & ncount==ncountNA  & rowKeep!=1)]
+                if(length(removeNAs)>0)assignment_conditions <- assignment_conditions[ -removeNAs ,]
+                ## Confirm that no (ID,t) combo with >1 row of L's have a row with L=NA
+                assignment_conditions[  , ncount:=.N, by=c(id_var,"intnum")] ## need to recompute ncount since deleted some rows
+                if(assignment_conditions[ ncount>1,.N]>0)assert_that(identical(unique(assignment_conditions[ ncount>1 , sum(is.na(get(cov_date))), by=c(id_var,"intnum")]$V1),0L))
+                assignment_conditions[  , `:=`( c("ncount", "ncountNA","rowKeep"), vector("list",3) )]
+                ## Dedup and check nrow is same as outcome_data
+                assert_that(identical(assignment_conditions[fromTimeDep==0 & !is.na(get(cov_date)),unique(intnum)],0L))
+                ## Identify maximum number of covariates per ID and intnum and order data by cov_date and fromTimeDep within ID,intnum so that wide format correctly captures temporal ordering of fills in each interval
+                setkeyv(assignment_conditions, c(id_var,"intnum",cov_date,"fromTimeDep"))
+                assignment_conditions[,cntCov:=(1:.N),by=c(id_var,"intnum")]
+                assignment_conditions[,maxCov:=max(cntCov),by=c(id_var,"intnum")]
+                nCov <- assignment_conditions[,max(cntCov)]
+                ## Define total number of covariates and fill out their values after figuring out the class of the covariate column
+                NAcov <- c("as_date(NA)", ifelse(is.integer(assignment_conditions[,get(cov_name)]),"NA_integer_", ifelse(is.character(assignment_conditions[,get(cov_name)]), "NA_character_", "NA_real_")) )
+                initializeCov <- eval(parse(text=("data.table("%+%paste(rep(NAcov,nCov),collapse=",")%+%")")))
+                assert_that(ncol(initializeCov)<=max_cov_var, msg = "The number of covariate variables required to encode all possible "%+%cov_name%+%" covariate levels exceed the maximum number allowed, i.e. "%+%max_cov_var%+%". If this is expected, set 'max_cov_var' to a larger value to prevent this error message.")
+                assignment_conditions[,`:=`( c(cov_date,cov_name)%+%"."%+%rep(1:nCov,each=2), initializeCov )]
+                assert_that(identical(key(assignment_conditions),c(id_var,"intnum",cov_date,"fromTimeDep")))
+                for(i.cov in 1:nCov){
+                    assignment_conditions[cntCov==i.cov & !is.na(get(cov_date)) , `:=`( cov_date%+%"."%+%i.cov , get(cov_date) ) ]
+                    assignment_conditions[cntCov==i.cov & !is.na(get(cov_date)) , `:=`( cov_name%+%"."%+%i.cov , get(cov_name) ) ]
+                    if(i.cov>1)for(i.level in c(cov_name,cov_date)){
+                                   assignment_conditions[ maxCov>=i.cov & cntCov<=i.cov , LOVCB := rev(cumsum(!is.na(rev(get(i.level%+%"."%+%i.cov))))) , by = c(id_var, "intnum") ]
+                                   assignment_conditions[ maxCov>=i.cov & cntCov<=i.cov , i.level%+%"."%+%i.cov := get(i.level%+%"."%+%i.cov)[.N] , by = c(id_var, "intnum", "LOVCB") ] ## implement last observed value carried backward by ID and intnum so that we can dedup later on each column
+                               }
+                }
+                ## Set cov_name and cov_date to last value assigned to interval to match old LtAt approach
+                assignment_conditions[ , `:=`( c(cov_date, cov_name), list(get(cov_date)[.N],get(cov_name)[.N]) ), by=c(id_var,"intnum") ]
+                assignment_conditions <- assignment_conditions[cntCov==1,] # dedup
+                ## Validate that we picked the last cov measurement for that bin
+                for(i.cov in 1:nCov)assert_that( assignment_conditions[ !is.na(get(cov_date)) & !is.na(get(cov_date%+%"."%+%i.cov)) , all(get(cov_date)>=get(cov_date%+%"."%+%i.cov)) ])
+                assignment_conditions[maxCov%in%1 & is.na(get(cov_name)), maxCov:=0] ## replace maxCov so it encodes the number of measurement at time t
+                setnames(assignment_conditions, "maxCov", "max."%+%cov_name)
+                assignment_conditions[,`:=`( c("fromTimeDep","cntCov","Ldt_low","Ldt_up") , vector("list",4) )]
+                if("LOVCB"%in%names(assignment_conditions))assignment_conditions[, "LOVCB":=NULL]
+                setkeyv(assignment_conditions,c(id_var,"intnum"))
+
+                ## merge this cov data with prior assembled data
+                assert_that( identical(assignment_conditions[,c(id_var,"intnum"), with=FALSE],outcome_data[,c(id_var,"intnum"), with=FALSE]) )
+                ## if(cov_position==1){
+                ##     data_assigned_lt <- merge(outcome_data, assignment_conditions, by=c(id_var,"intnum"), all=TRUE)
+                ##     expNames <- names(outcome_data)[!names(outcome_data)%in%c(id_var, "intnum", "intstart", "intend","outcome", "censor",eof_type_var)]
+                ##     covNames <- names(assignment_conditions)[!names(assignment_conditions)%in%c(id_var, "intnum", cov_name, cov_date)]
+                ##     data.table::setcolorder(data_assigned_lt, c(id_var, "intnum", "intstart", "intend",
+                ##                                                 expNames, "outcome", "censor",eof_type_var, 
+                ##                                                 cov_name, cov_date, covNames
+                ##                                                 ))
+                ##     data.table::setnames(data_assigned_lt, c(cov_date,covNames[grep(cov_date,covNames)]) ,
+                ##                          c("dt"%+%cov_name,"dt"%+%cov_name%+%gsub(cov_date,"",covNames[grep(cov_date,covNames)])) )
+                ## }else{
+                ##     covNames <- names(assignment_conditions)[!names(assignment_conditions)%in%c(id_var, "intnum", cov_name, cov_date)]
+                ##     data.table::setnames(assignment_conditions, c(cov_date,covNames[grep(cov_date,covNames)]) ,
+                ##                          c("dt"%+%cov_name,"dt"%+%cov_name%+%gsub(cov_date,"",covNames[grep(cov_date,covNames)])) )
+                ##     assert_that( all.equal(assignment_conditions[,c(id_var,"intnum"), with=FALSE],data_assigned_lt[,c(id_var,"intnum"), with=FALSE]) )
+                ##     data_assigned_lt <- data.table::merge.data.table(data_assigned_lt,assignment_conditions,by=c(id_var,"intnum"),all=TRUE)
+                ## }
+                return(assignment_conditions)
+            }) # END: loop over covariates, i.e. end of future_lapply or for(cov_position in seq_along(private$.cov_data)){...
+        ## combined list of data.tables together and sort by ID
+        for(cov_position in seq_along(private$.cov_data)){
+            ## extract data for the current covariate only
+            cov_name <- private$.cov_data[[cov_position]]$L_name
+            cov_date <- private$.cov_data[[cov_position]]$L_date
+            
+            if(cov_position==1){
+                data_assigned_lt <- merge(outcome_data, data_assigned_lt_bycov[[cov_position]], by=c(id_var,"intnum"), all=TRUE)
+                expNames <- names(outcome_data)[!names(outcome_data)%in%c(id_var, "intnum", "intstart", "intend","outcome", "censor",eof_type_var)]
+                covNames <- names(data_assigned_lt_bycov[[cov_position]])[!names(data_assigned_lt_bycov[[cov_position]])%in%c(id_var, "intnum", cov_name, cov_date)]
+                data.table::setcolorder(data_assigned_lt, c(id_var, "intnum", "intstart", "intend",
+                                                            expNames, "outcome", "censor",eof_type_var, 
+                                                            cov_name, cov_date, covNames
+                                                            ))
+                data.table::setnames(data_assigned_lt, c(cov_date,covNames[grep(cov_date,covNames)]) ,
+                                     c("dt."%+%cov_name,"dt."%+%cov_name%+%gsub(cov_date,"",covNames[grep(cov_date,covNames)])) )
+            }else{
+                covNames <- names(data_assigned_lt_bycov[[cov_position]])[!names(data_assigned_lt_bycov[[cov_position]])%in%c(id_var, "intnum", cov_name, cov_date)]
+                data.table::setnames(data_assigned_lt_bycov[[cov_position]], c(cov_date,covNames[grep(cov_date,covNames)]) ,
+                                     c("dt."%+%cov_name,"dt."%+%cov_name%+%gsub(cov_date,"",covNames[grep(cov_date,covNames)])) )
+                assert_that( identical(data_assigned_lt_bycov[[cov_position]][,c(id_var,"intnum"), with=FALSE],data_assigned_lt[,c(id_var,"intnum"), with=FALSE]) )
+                data_assigned_lt <- data.table::merge.data.table(data_assigned_lt,data_assigned_lt_bycov[[cov_position]],by=c(id_var,"intnum"),all=TRUE)
+            }
+        }
+        
+        } else { ## if there is no time-dep covariates, i.e. else following if(any(!is.na(private$.cov_data))){..}
+            data_assigned_lt <- outcome_data
+        }
+        
+        ## For loop for time-indepent
+        data.table::setkeyv(data_assigned_lt, c(id_var,"intnum"))
+        
+        ## Assign time-independent covariates
+        t_ind_cov_data <- cohort_data[,c(id_var,t_ind_cov),with=FALSE]
+        data_assigned_lt <- merge(data_assigned_lt, t_ind_cov_data, by=id_var, all.x = TRUE, all.y=FALSE)
+        for(cov.i in t_ind_cov){
+            data_assigned_lt[get(cov.i)%in%"",eval(cov.i):=NA]
+        }
+
+        ## output
+        private$.data <- data_assigned_lt
+        invisible(self)
+    },
+    cleanUp = function(){
+
+        summary_cov_var <- private$.summary_cov_var
+        format <- private$.format
+        dates <- private$.dates
+        ## Create object that will be used to reorder covariates in a standardized fashion
+        timeIndep <- names(private$.cohort_data$L0_timeIndep)
+        names(timeIndep) <- timeIndep
+        I.timeIndep <- "I."%+%timeIndep
+        names(I.timeIndep) <- timeIndep%+%".1"
+        timeIndepOrdered <- as.character(c(timeIndep,I.timeIndep)[sort(names(c(timeIndep,I.timeIndep)))])
+            
+        timeDep <- names(private$.cov_data)
+        if(length(timeDep)>0){
+            names(timeDep) <- timeDep
+            dt.timeDep <- "dt."%+%timeDep
+            names(dt.timeDep) <- timeDep%+%".1"
+            I.timeDep <- "I."%+%timeDep
+            names(I.timeDep) <- timeDep%+%".2"
+            timeDepOrdered <- as.character(c(timeDep,dt.timeDep,I.timeDep)[sort(names(c(timeDep,dt.timeDep,I.timeDep)))])
+            timeDepOrdered <- timeDepOrdered[timeDepOrdered%in%names(private$.data)]
+
+
+            maxVal <- unlist(lapply(private$.data[, mget("max."%+%timeDep)],max))
+            other.timeDep <- unlist(sapply(timeDep, function(x,y){
+                res <- c( "max."%+%x, rep( c(x, "dt."%+%x), y["max."%+%x] )%+%"."%+%rep( 1:y["max."%+%x], each=2) )
+                return(res)
+            },y=maxVal,simplify=FALSE,USE.NAMES=FALSE),use.names=FALSE)
+            timeDepOrdered <- c(timeDepOrdered,other.timeDep)
+            timeDepOrdered <- timeDepOrdered[timeDepOrdered%in%names(private$.data)]
+        }else{
+            timeDepOrdered <- NULL
+            other.timeDep <- NULL
+        }
+        expNames <- c("exposure",private$.exp_data$start_date,private$.exp_data$exp_level)%+%"."%+%rep(1:private$.data[, max(maxExp)],each=length(private$.exp_data$exp_level)+2)
+        orderedCol <- c(private$.cohort_data$IDvar,"intnum","intstart","intend",private$.cohort_data$EOF_type,"outcome","censor",timeIndepOrdered,timeDepOrdered,"maxExp",expNames)
+        assert_that( length(names(private$.data)[ !names(private$.data)%in%orderedCol ])==0 , msg = "some columns might need exporting")
+        
+        ## Remove unneeded columns
+        col2remove <- ""
+        if(!dates){
+            col2remove <- unlist(lapply(private$.data,class))=="Date"
+            col2remove <- names(col2remove)[col2remove]
+            private$.data <- private$.data[ , -col2remove, with=FALSE]
+            orderedCol <- orderedCol[!orderedCol%in%col2remove]
+         }
+        if(!is.null(other.timeDep) & summary_cov_var=="last"){
+            col2remove2 <- other.timeDep[!other.timeDep%in%col2remove]
+            private$.data <- private$.data[ , -col2remove2, with=FALSE]
+            orderedCol <- orderedCol[!orderedCol%in%col2remove2]
+        }
+
+        ## Reformat
+        if(format=="MSM SAS macro"){
+            ## remove patients censored in first f/up interval
+            IDsCensoredBin0 <- private$.data[ censor==1 & intnum==0, unique(get(private$.cohort_data$IDvar)) ]
+            private$.data <- private$.data[ !get(private$.cohort_data$IDvar)%in%IDsCensoredBin0,  ]
+            ## shift outcome and censor up by one row
+            private$.data[ , outcome := shift(outcome, 1L, fill=NA, type = "lead") , by = get(private$.cohort_data$IDvar) ]
+            private$.data[ , censor := shift(censor, 1L, fill=NA, type = "lead") , by = get(private$.cohort_data$IDvar) ]
+            ## remove last row of each ID
+            private$.data <- private$.data[ , .SD[-.N,] , by = get(private$.cohort_data$IDvar) ][, -"get", with=FALSE ]
+            ## set outcome to NA in last row when censor = 1
+            private$.data[ censor %in% 1, outcome := NA ]
+        }
+        
+        ## Reorder data before exiting
+        setcolorder(private$.data, orderedCol)
+        data.table::setkeyv(private$.data, c(private$.cohort_data$IDvar,"intnum"))
+        invisible(self)
+    }    
   )
 )

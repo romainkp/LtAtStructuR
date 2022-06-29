@@ -1,6 +1,6 @@
 Package: LtAtStructuR
 Title: Structuring of Complex Longitudinal Data into Long Format
-Version: 1.0.4
+Version: 1.1.0
 Authors@R: c(
     person(given = "Romain", family = "Neugebauer",
            email = "romain.s.neugebauer@kp.org",
@@ -46,4 +46,4 @@ Encoding: UTF-8
 LazyData: true
 VignetteBuilder: knitr
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.1.0
+RoxygenNote: 7.1.2
