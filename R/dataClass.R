@@ -2017,7 +2017,8 @@ LtAtData <- R6::R6Class(
                                                   exp_start_j <- exp_data_this_id[get(exp_level)%in%At.0,get(start_date_var)][1]
                                                   interval.final <- lubridate::interval(index_date_this_id+1,exp_start_j-cov_acute)
                                                 }
-                                                if(any(cov_dates_this_id%within%interval.final)){
+                                                interval_exists_lb_lte_ub <- ifelse(length(interval.final)!=0,int_start(interval.final) <= int_end(interval.final),FALSE)
+                                                if(interval_exists_lb_lte_ub & any(cov_dates_this_id%within%interval.final)){
                                                   combined_data[intnum==0,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
                                                   combined_data[intnum==0,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
                                                 } else {
@@ -2065,7 +2066,7 @@ LtAtData <- R6::R6Class(
                                               }))
                                               interval.end <- d1_case11 - cov_acute
                                               #interval.end <- exp_start_this_id[1] - cov_acute              
-                                              assigned_L <- cov_data_this_id[cov_data_this_id[, get(cov_date)]
+                                              assigned_L <- cov_data_this_id[ (interval.start <= interval.end) & cov_data_this_id[, get(cov_date)]
                                                                              %within% suppressWarnings(lubridate::interval(interval.start,interval.end)), ][, .SD[which.max(get(cov_date))]]              
                                               if(nrow(assigned_L)==0) {
                                                 combined_data[case==4,eval(cov_name):=NA]
@@ -2100,7 +2101,8 @@ LtAtData <- R6::R6Class(
                                               ### index date and value supersedes any covariate measurement on same day
                                               cov_dates_this_id_t0 <- cov_dates_this_id_t0_tmp[!duplicated(cov_dates_this_id_t0_tmp)]
                                               cov_values_this_id_t0 <- cov_values_this_id_t0_tmp[!duplicated(cov_dates_this_id_t0_tmp)]
-                                              if(any(cov_dates_this_id_t0%within%interval.final)){
+                                              interval_exists_lb_lte_ub <- ifelse(length(interval.final)!=0,int_start(interval.final) <= int_end(interval.final),FALSE)
+                                              if(interval_exists_lb_lte_ub & any(cov_dates_this_id_t0%within%interval.final)){
                                                 combined_data[intnum==t.int,eval(cov_date):=tail(cov_dates_this_id_t0[cov_dates_this_id_t0%within%interval.final],1)]
                                                 combined_data[intnum==t.int,eval(cov_name):=tail(cov_values_this_id_t0[cov_dates_this_id_t0%within%interval.final],1)]
                                               }
@@ -2183,7 +2185,8 @@ LtAtData <- R6::R6Class(
                                               cov_dates_this_id_t0 <- cov_dates_this_id_t0_tmp[!duplicated(cov_dates_this_id_t0_tmp)]
                                               cov_values_this_id_t0 <- cov_values_this_id_t0_tmp[!duplicated(cov_dates_this_id_t0_tmp)]
                                               if(t.int==0){
-                                                if(any(cov_dates_this_id_t0%within%interval.final)){
+                                                interval_exists_lb_lte_ub <- ifelse(length(interval.final)!=0,int_start(interval.final) <= int_end(interval.final),FALSE)
+                                                if(interval_exists_lb_lte_ub & any(cov_dates_this_id_t0%within%interval.final)){
                                                   combined_data[intnum==t.int,eval(cov_date):=tail(cov_dates_this_id_t0[cov_dates_this_id_t0%within%interval.final],1)]
                                                   combined_data[intnum==t.int,eval(cov_name):=tail(cov_values_this_id_t0[cov_dates_this_id_t0%within%interval.final],1)]
                                                 } else if(interval.start>interval.end){
@@ -2195,7 +2198,8 @@ LtAtData <- R6::R6Class(
                                                 }
                                               }
                                               else {
-                                                if(any(cov_dates_this_id%within%interval.final)){
+                                                interval_exists_lb_lte_ub <- ifelse(length(interval.final)!=0,int_start(interval.final) <= int_end(interval.final),FALSE)
+                                                if(interval_exists_lb_lte_ub & any(cov_dates_this_id%within%interval.final)){
                                                   combined_data[intnum==t.int,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
                                                   combined_data[intnum==t.int,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
                                                 }
@@ -2212,7 +2216,8 @@ LtAtData <- R6::R6Class(
                                               interval.start <- dplyr::if_else(is.na(combined_data[intnum==t.int,get(cov_date)]), acute.exp.date, combined_data[intnum==t.int,get(cov_date)]+1) ### interval.start is strictly after the date when L(t) is measured, if L(t) is present, or, else,(strictly after the first day the exposure changes(i.e. cov_acute==FALSE) or on or after the first day when the exposure changes(i.e. cov_acute==TRUE))
                                               interval.end <- eof_date_this_id
                                               interval.final <- lubridate::interval(interval.start,interval.end)
-                                              if(any(cov_dates_this_id%within%interval.final)){
+                                              interval_exists_lb_lte_ub <- ifelse(length(interval.final)!=0,int_start(interval.final) <= int_end(interval.final),FALSE)
+                                              if(interval_exists_lb_lte_ub & any(cov_dates_this_id%within%interval.final)){
                                                 combined_data[intnum==t.int+1,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
                                                 combined_data[intnum==t.int+1,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
                                               }
@@ -2272,7 +2277,8 @@ LtAtData <- R6::R6Class(
                                                     interval.start <- dplyr::if_else(combined_data[intnum==t.i-1,is.na(get(cov_name)) & is.na(get(cov_date))], combined_data[intnum==t.i-1,intstart], combined_data[intnum==t.i-1,get(cov_date)+1]) ### Check if there exists a date for L(t-1); if not, starting point is intstart date, if yes, starting point is L(t-1) date + 1
                                                     interval.end <- combined_data[intnum==t.i-1,intend]
                                                     interval.final <- lubridate::interval(interval.start,interval.end)
-                                                    if(any(cov_dates_this_id%within%interval.final)){
+                                                    interval_exists_lb_lte_ub <- ifelse(length(interval.final)!=0,int_start(interval.final) <= int_end(interval.final),FALSE)
+                                                    if(interval_exists_lb_lte_ub & any(cov_dates_this_id%within%interval.final)){
                                                       combined_data[intnum==t.i,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
                                                       combined_data[intnum==t.i,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
                                                     }
@@ -2320,7 +2326,8 @@ LtAtData <- R6::R6Class(
                                                     if(is.na(as.character(d_case11))) d_case11 <- combined_data[intnum==t.i,intstart]
                                                     interval.end <- d_case11 - cov_acute
                                                     interval.final <- lubridate::interval(interval.start,interval.end)
-                                                    if(any(cov_dates_this_id%within%interval.final)){
+                                                    interval_exists_lb_lte_ub <- ifelse(length(interval.final)!=0,int_start(interval.final) <= int_end(interval.final),FALSE)
+                                                    if(interval_exists_lb_lte_ub & any(cov_dates_this_id%within%interval.final)){
                                                       combined_data[intnum==t.i,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
                                                       combined_data[intnum==t.i,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
                                                     }
@@ -2338,7 +2345,8 @@ LtAtData <- R6::R6Class(
                                                 interval.start <- dplyr::if_else(combined_data[intnum==t.int-1,is.na(get(cov_name)) & is.na(get(cov_date))], combined_data[intnum==t.int-1,intstart], combined_data[intnum==t.int-1,get(cov_date)+1]) ### Check if there exists a date for L(t-1); if not, starting point is intstart date, if yes, starting point is L(t-1) date + 1
                                                 interval.end <- combined_data[intnum==t.int-1,intend]
                                                 interval.final <- lubridate::interval(interval.start,interval.end)
-                                                if(any(cov_dates_this_id%within%interval.final)){
+                                                interval_exists_lb_lte_ub <- ifelse(length(interval.final)!=0,int_start(interval.final) <= int_end(interval.final),FALSE)
+                                                if(interval_exists_lb_lte_ub & any(cov_dates_this_id%within%interval.final)){
                                                   combined_data[intnum==t.int,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
                                                   combined_data[intnum==t.int,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
                                                 }
@@ -2386,7 +2394,7 @@ LtAtData <- R6::R6Class(
                                                                                      d_case11 - cov_acute)
                                                 # ints_overlaps <- interval(combined_data[case == "11", Ltm1_instart], d_case11 - cov_acute) ### ATTENTION: Trying to implement a fix here that accounts for starting at the previous interval
                                                 overwrite_cov <- rbindlist(lapply(ints_overlaps, function(x)
-                                                  cov_data_this_id[cov_data_this_id[, get(cov_date)]
+                                                  cov_data_this_id[ (int_start(x) <= int_end(x)) & cov_data_this_id[, get(cov_date)] 
                                                                    %within% x, ][, .SD[which.max(get(cov_date))]]),
                                                   idcol = TRUE)
                                                 overwrite_cov[, intnum := combined_data[case == "11",
@@ -2424,7 +2432,7 @@ LtAtData <- R6::R6Class(
                                               int.start <- dplyr::if_else(is.na(lubridate::ymd(combined_data[.N-1, get(cov_date)])), lubridate::ymd(combined_data[.N-1, intstart]), lubridate::ymd(combined_data[.N-1, get(cov_date)+1]))
                                               int.end <- eof_date_this_id-cov_acute
                                               
-                                              assigned_L <- cov_data_this_id[cov_data_this_id[, get(cov_date)]
+                                              assigned_L <- cov_data_this_id[ (int.start <= int.end) & cov_data_this_id[, get(cov_date)]
                                                                              %within% suppressWarnings(lubridate::interval(int.start,int.end)), ][, .SD[which.max(get(cov_date))]]
                                               
                                               if(nrow(assigned_L)==0) {
@@ -2460,7 +2468,7 @@ LtAtData <- R6::R6Class(
                                                   Zpenultimate.modified.start <- combined_data[!is.na(get(cov_date)) & intnum<t.int,get(cov_date)][combined_data[!is.na(get(cov_date)) & intnum<t.int,get(cov_date)]%within%Zpenultimate] + 1
                                                   lubridate::int_start(Zpenultimate) <- Zpenultimate.modified.start 
                                                 }
-                                                if(any(cov_dates_this_id%within%Zpenultimate)){  
+                                                if((int_start(Zpenultimate) <= int_end(Zpenultimate)) & any(cov_dates_this_id%within%Zpenultimate)){  
                                                   combined_data[intnum==t.int,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%Zpenultimate],1)]
                                                   combined_data[intnum==t.int,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%Zpenultimate],1)]
                                                 } else{
@@ -2472,7 +2480,8 @@ LtAtData <- R6::R6Class(
                                                 interval.start <- dplyr::if_else(is.na(combined_data[intnum==t.int,get(cov_date)]), max(lubridate::as_date(lubridate::int_end(Zpenultimate))+1, combined_data[!is.na(get(cov_date)) & intnum<t.int,][.N,get(cov_date)+1]), combined_data[intnum==t.int,get(cov_date)]+1) ### interval.start is strictly after the date when L(t) is measured, if L(t) is present, or, else,(strictly after the first day the exposure changes(i.e. cov_acute==FALSE) or on or after the first day when the exposure changes(i.e. cov_acute==TRUE))
                                                 interval.end <- eof_date_this_id
                                                 interval.final <- lubridate::interval(interval.start,interval.end)
-                                                if(any(cov_dates_this_id%within%interval.final)){
+                                                interval_exists_lb_lte_ub <- ifelse(length(interval.final)!=0,int_start(interval.final) <= int_end(interval.final),FALSE)
+                                                if(interval_exists_lb_lte_ub & any(cov_dates_this_id%within%interval.final)){
                                                   combined_data[intnum==t.int+1,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
                                                   combined_data[intnum==t.int+1,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
                                                 } else{
@@ -2500,7 +2509,8 @@ LtAtData <- R6::R6Class(
                                                 ### index date and value supersedes any covariate measurement on same day
                                                 cov_dates_this_id_t0 <- cov_dates_this_id_t0_tmp[!duplicated(cov_dates_this_id_t0_tmp)]
                                                 cov_values_this_id_t0 <- cov_values_this_id_t0_tmp[!duplicated(cov_dates_this_id_t0_tmp)]
-                                                if(any(cov_dates_this_id_t0%within%interval.final)){
+                                                interval_exists_lb_lte_ub <- ifelse(length(interval.final)!=0,int_start(interval.final) <= int_end(interval.final),FALSE)
+                                                if(interval_exists_lb_lte_ub & any(cov_dates_this_id_t0%within%interval.final)){
                                                   combined_data[intnum==t.int,eval(cov_date):=tail(cov_dates_this_id_t0[cov_dates_this_id_t0%within%interval.final],1)]
                                                   combined_data[intnum==t.int,eval(cov_name):=tail(cov_values_this_id_t0[cov_dates_this_id_t0%within%interval.final],1)]
                                                 } else if(interval.start>interval.end) { ## if d=index date and cov_acute=TRUE, then L(t) is set to the measurment on the index date (if this is true then interval.start>interval.end)
@@ -2514,7 +2524,8 @@ LtAtData <- R6::R6Class(
                                                 interval.start <- dplyr::if_else(is.na(combined_data[intnum==t.int,get(cov_date)]), exp_start_this_id[1]+!cov_acute, combined_data[intnum==t.int,get(cov_date)]+1) ### interval.start is strictly after the date when L(t) is measured, if L(t) is present, or; else,(strictly after the first day the exposure changes(i.e. cov_acute==FALSE) or on or after the first day when the exposure changes(i.e. cov_acute==TRUE))
                                                 interval.end <- eof_date_this_id
                                                 interval.final <- lubridate::interval(interval.start,interval.end)
-                                                if(any(cov_dates_this_id%within%interval.final)){
+                                                interval_exists_lb_lte_ub <- ifelse(length(interval.final)!=0,int_start(interval.final) <= int_end(interval.final),FALSE)
+                                                if(interval_exists_lb_lte_ub & any(cov_dates_this_id%within%interval.final)){
                                                   combined_data[intnum==t.int+1,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
                                                   combined_data[intnum==t.int+1,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
                                                 }
@@ -2582,7 +2593,7 @@ LtAtData <- R6::R6Class(
                                                   Zpenultimate.modified.start <- tail(combined_data[!is.na(get(cov_date)) & intnum<t.int,get(cov_date)][combined_data[!is.na(get(cov_date)) & intnum<t.int,get(cov_date)]%within%Zpenultimate],1) + 1
                                                   lubridate::int_start(Zpenultimate.to.d.day) <- Zpenultimate.modified.start
                                                 }
-                                                if(any(cov_dates_this_id%within%Zpenultimate.to.d.day)){
+                                                if((int_start(Zpenultimate.to.d.day) <= int_end(Zpenultimate.to.d.day)) & any(cov_dates_this_id%within%Zpenultimate.to.d.day)){
                                                   combined_data[intnum==t.int,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%Zpenultimate.to.d.day],1)]
                                                   combined_data[intnum==t.int,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%Zpenultimate.to.d.day],1)]
                                                 }
@@ -2595,7 +2606,8 @@ LtAtData <- R6::R6Class(
                                                 interval.start <- dplyr::if_else(is.na(combined_data[intnum==t.int,get(cov_date)]), max(lubridate::as_date(lubridate::int_end(Zpenultimate.to.d.day))+1, combined_data[!is.na(get(cov_date)) & intnum<t.int,][.N,get(cov_date)+1]), combined_data[intnum==t.int,get(cov_date)]+1) ### interval.start is strictly after the date when L(t) is measured, if L(t) is present, or, else,(strictly after the first day the exposure changes(i.e. cov_acute==FALSE) or on or after the first day when the exposure changes(i.e. cov_acute==TRUE))
                                                 interval.end <- eof_date_this_id
                                                 interval.final <- lubridate::interval(interval.start,interval.end)
-                                                if(any(cov_dates_this_id%within%interval.final)){
+                                                interval_exists_lb_lte_ub <- ifelse(length(interval.final)!=0,int_start(interval.final) <= int_end(interval.final),FALSE)
+                                                if(interval_exists_lb_lte_ub & any(cov_dates_this_id%within%interval.final)){
                                                   combined_data[intnum==t.int+1,eval(cov_date):=tail(cov_dates_this_id[cov_dates_this_id%within%interval.final],1)]
                                                   combined_data[intnum==t.int+1,eval(cov_name):=tail(cov_values_this_id[cov_dates_this_id%within%interval.final],1)]
                                                 }
