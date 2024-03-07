@@ -917,11 +917,13 @@ timeDepCovData <- R6::R6Class(
 
           if (private$.type %in% c("interval")) {
             Lt.before.or.at.index <- private$.data[get(private$.L_date) <= get(otherData$index_date), ]
-            Lt.keep <- Lt.before.or.at.index[, closest.before.index := as.numeric(get(private$.L_date) == max(get(private$.L_date))), by = c(private$.IDvar)][closest.before.index == 1, ]
-            Lt.keep[, eval(private$.L_date) := get(otherData$index_date)][, closest.before.index := NULL]
-            ## remove Lts before/on index and bring back Lts closest before or on index
-            assert_that(identical(names(private$.data), names(Lt.keep)))
-            private$.data <- rbind(private$.data[get(private$.L_date) > get(otherData$index_date), ], Lt.keep)
+            if(nrow(Lt.before.or.at.index) > 0) {
+              Lt.keep <- Lt.before.or.at.index[, closest.before.index := as.numeric(get(private$.L_date) == max(get(private$.L_date))), by = c(private$.IDvar)][closest.before.index == 1, ]
+              Lt.keep[, eval(private$.L_date) := get(otherData$index_date)][, closest.before.index := NULL]
+              ## remove Lts before/on index and bring back Lts closest before or on index
+              assert_that(identical(names(private$.data), names(Lt.keep)))
+              private$.data <- rbind(private$.data[get(private$.L_date) > get(otherData$index_date), ], Lt.keep)
+            }
             ## remove measurements with dates strictly after EOF dates
             private$.data <- private$.data[get(private$.L_date) <= get(otherData$EOF_date), ]
           }
@@ -2322,8 +2324,11 @@ LtAtData <- R6::R6Class(
                                                     ### of the non-exposure status  is defined as the first day of the interval when the
                                                     ### unit is unexposed to any exposure levels. If the patients is always exposed during
                                                     ### the interval then the start of non-exposure is defined as the first day of the interval
-                                                    ### by default. (i.e. if d_case11 is NA then we use the start of the interval as day d)
-                                                    if(is.na(as.character(d_case11))) d_case11 <- combined_data[intnum==t.i,intstart]
+                                                    ### by default. (i.e. if d_case11 is Inf/NA then we use the start of the interval as day d)
+                                                    ### With R 4.3.0 lubridate::as_date(min(c(NA,NA), na.rm = TRUE)) returns "Inf" instead of "NA",
+                                                    ### so d_case11 value of "Inf" or "NA" indicates patient who was always exposed during the interval
+                                                    ### but had A(t)=0/"not exposed" which implies day d is start of current interval
+                                                    if(is.infinite(d_case11) | is.na(as.character(d_case11))) d_case11 <- combined_data[intnum==t.i,intstart]
                                                     interval.end <- d_case11 - cov_acute
                                                     interval.final <- lubridate::interval(interval.start,interval.end)
                                                     interval_exists_lb_lte_ub <- ifelse(length(interval.final)!=0,int_start(interval.final) <= int_end(interval.final),FALSE)
